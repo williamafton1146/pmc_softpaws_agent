@@ -19,6 +19,7 @@ AI_CLIENT = AsyncOpenAI(
     base_url="https://api.provod.ai/v1",
 )
 ACTIVE_AI_MODEL = None
+AVAILABLE_AI_MODELS = []
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
@@ -31,7 +32,7 @@ ai_history = {}  # Память диалогов для ИИ
 AFK_TIMEOUT = 300  # 5 минут (300 секунд) без твоих сообщений = режим «не в сети»
 last_owner_activity = time.time()
 manual_afk = False
-afk_last_reply_time = {}  # Чтобы бот не спамил на каждое сообщение подряд
+afk_last_reply_time = {}
 
 # Файлы для сохранения данных
 RP_FILE = "rp_commands.json"
@@ -141,7 +142,6 @@ RP_ACTIONS = {
     ],
 }
 
-# Английские алиасы для команд со слэшем
 SLASH_RP_ALIASES = {
     "hug": "обнять",
     "kiss": "поцеловать",
@@ -263,50 +263,49 @@ def format_duration(seconds: int) -> str:
 
 
 def is_owner_offline() -> bool:
-    """Проверяет, находится ли владелец в режиме 'Не в сети'"""
     if manual_afk:
         return True
     return (time.time() - last_owner_activity) >= AFK_TIMEOUT
 
 
 async def resolve_ai_model() -> str:
-    """Автоматически находит рабочую модель на provod.ai"""
-    global ACTIVE_AI_MODEL
+    """Получает реальный список моделей с provod.ai и ставит их в приоритет"""
+    global ACTIVE_AI_MODEL, AVAILABLE_AI_MODELS
     if ACTIVE_AI_MODEL:
         return ACTIVE_AI_MODEL
 
     preferred = [
-        "llama-3.3-70b-instruct",
-        "meta-llama/llama-3.3-70b-instruct",
-        "llama-3.3-70b-versatile",
-        "gpt-4o-mini",
-        "deepseek-chat",
-        "gpt-3.5-turbo",
+        "deepseek-v4-flash",
+        "gemini-3.1-flash-lite",
+        "qwen3-max-preview",
+        "qwen3.7-max",
+        "glm-5.3-flash",
+        "glm-5.3",
+        "glm-5.2",
+        "claude-fable-5.1",
+        "claude-fable-5",
+        "deepseek-v4-flash-0731",
     ]
     try:
         models_page = await AI_CLIENT.models.list()
-        available_ids = [m.id for m in models_page.data]
-        print(f"[ИИ] Доступные модели на ключе: {available_ids[:10]}")
+        AVAILABLE_AI_MODELS = [m.id for m in models_page.data]
+        print(f"[ИИ] Все доступные модели на ключе ({len(AVAILABLE_AI_MODELS)} шт.): {AVAILABLE_AI_MODELS}")
         for pref in preferred:
-            if pref in available_ids:
+            if pref in AVAILABLE_AI_MODELS:
                 ACTIVE_AI_MODEL = pref
                 return ACTIVE_AI_MODEL
-        for mid in available_ids:
-            if any(k in mid.lower() for k in ("llama", "gpt", "deepseek", "claude", "qwen", "gemini")):
-                ACTIVE_AI_MODEL = mid
-                return ACTIVE_AI_MODEL
-        if available_ids:
-            ACTIVE_AI_MODEL = available_ids[0]
+        if AVAILABLE_AI_MODELS:
+            ACTIVE_AI_MODEL = AVAILABLE_AI_MODELS[0]
             return ACTIVE_AI_MODEL
     except Exception as e:
         print(f"[!] Не удалось получить список моделей автоматически: {e}")
 
-    ACTIVE_AI_MODEL = "gpt-4o-mini"
+    ACTIVE_AI_MODEL = "deepseek-v4-flash"
     return ACTIVE_AI_MODEL
 
 
 async def ask_ai(chat_id: int, user_text: str, mode: str = "normal", partner_name: str = "Собеседник") -> str:
-    """Отправляет запрос к ИИ с сохранением короткой памяти диалога"""
+    """Отправляет запрос к ИИ, автоматически подбирая рабочую модель из доступных на ключе"""
     global ACTIVE_AI_MODEL
     model_name = await resolve_ai_model()
 
@@ -332,16 +331,19 @@ async def ask_ai(chat_id: int, user_text: str, mode: str = "normal", partner_nam
 
     messages_payload = [{"role": "system", "content": system_prompt}] + history
 
-    fallback_models = [
-        model_name,
-        "gpt-4o-mini",
-        "llama-3.3-70b-instruct",
-        "meta-llama/llama-3.3-70b-instruct",
-        "deepseek-chat",
+    # Формируем очередь моделей: сначала текущая, затем все реальные модели с твоего ключа
+    candidates = [model_name] + AVAILABLE_AI_MODELS + [
+        "deepseek-v4-flash",
+        "gemini-3.1-flash-lite",
+        "qwen3-max-preview",
+        "glm-5.3-flash",
+        "claude-fable-5.1",
     ]
 
     last_err = None
-    for m in dict.fromkeys(fallback_models):
+    for m in dict.fromkeys(candidates):
+        if not m:
+            continue
         try:
             resp = await AI_CLIENT.chat.completions.create(
                 model=m,
@@ -350,13 +352,18 @@ async def ask_ai(chat_id: int, user_text: str, mode: str = "normal", partner_nam
                 temperature=0.8,
             )
             reply_text = resp.choices[0].message.content.strip()
-            ACTIVE_AI_MODEL = m
+            if ACTIVE_AI_MODEL != m:
+                print(f"[ИИ] Найдена рабочая модель: {m}")
+                ACTIVE_AI_MODEL = m
             history.append({"role": "assistant", "content": reply_text})
             return reply_text
         except Exception as err:
+            print(f"[ИИ] Модель {m} не подошла: {err}")
             last_err = err
             continue
 
+    # Если запрос не удался, убираем последнее сообщение из истории
+    history.pop()
     return f"🥺 Ой, лапки запутались в проводах нейросети... ({last_err})"
 
 
@@ -383,7 +390,6 @@ async def send_business_reply(chat_id: int, text: str, conn_id: str, chat_name: 
 
 
 def is_secret_or_timer_media(message: types.Message) -> bool:
-    """Проверяет все возможные признаки исчезающего/защищённого медиа в Telegram"""
     if getattr(message, "has_protected_content", None):
         return True
     if getattr(message, "has_media_spoiler", None):
@@ -398,7 +404,6 @@ def is_secret_or_timer_media(message: types.Message) -> bool:
 
 
 async def download_media_bytes(file_id: str) -> bytes | None:
-    """Скачивает медиафайл в оперативную память, чтобы обойти запрет пересылки и удаление"""
     try:
         buf = io.BytesIO()
         await bot.download(file_id, destination=buf)
@@ -416,7 +421,6 @@ async def send_cached_media_to_owner(
     header: str,
     sender: str,
 ):
-    """Отправляет сохранённое медиа владельцу (сначала пробует из памяти, затем по file_id)"""
     filename_map = {
         "photo": "secret_photo.jpg",
         "video": "secret_video.mp4",
@@ -629,14 +633,20 @@ async def cmd_del_rp(message: types.Message):
 
 @dp.message()
 async def handle_bot_dm_ai(message: types.Message):
-    """Отвечает через ИИ на любое обычное сообщение в личке с самим ботом"""
+    """Отвечает через ИИ на любое сообщение в личке с самим ботом"""
     global last_owner_activity
     last_owner_activity = time.time()
 
-    user_prompt = message.text or message.caption
+    user_prompt = (message.text or message.caption or "").strip()
     if not user_prompt:
         await message.answer("🐾 Мур? Напиши мне что-нибудь текстом, и я с радостью отвечу uwu~")
         return
+
+    # Если в личке с ботом написали через .ai или .ии — аккуратно убираем префикс
+    for prefix in (".ai ", ".ии ", "/ai ", "/ии ", "!ai ", "!ии "):
+        if user_prompt.lower().startswith(prefix):
+            user_prompt = user_prompt[len(prefix):].strip()
+            break
 
     await bot.send_chat_action(chat_id=message.chat.id, action="typing")
     reply = await ask_ai(message.chat.id, user_prompt, mode="normal")
@@ -653,7 +663,6 @@ async def handle_business_message(message: types.Message):
     conn_id = message.business_connection_id
     owner_chat_id = await get_owner_chat_id(conn_id)
 
-    # Если пишет сам владелец аккаунта — обновляем время его онлайна
     if message.from_user.id == owner_chat_id:
         last_owner_activity = time.time()
 
@@ -662,7 +671,6 @@ async def handle_business_message(message: types.Message):
     chat_stat["messages"] += 1
     save_stats(CHAT_STATS)
 
-    # Определяем тип медиа и его file_id
     media_type = None
     file_id = None
     if message.photo:
@@ -681,12 +689,10 @@ async def handle_business_message(message: types.Message):
         media_type = "document"
         file_id = message.document.file_id
 
-    # Скачиваем медиа от собеседника в оперативную память (для перехвата таймеров и удалёнок)
     raw_bytes = None
     if media_type and file_id and message.from_user.id != owner_chat_id:
         raw_bytes = await download_media_bytes(file_id)
 
-        # Если у медиа есть признак таймера / секретки / защиты — сразу шлём владельцу
         if is_secret_or_timer_media(message):
             chat_stat["secret_media_caught"] += 1
             save_stats(CHAT_STATS)
@@ -702,7 +708,6 @@ async def handle_business_message(message: types.Message):
             except Exception as e:
                 print(f"[!] Не удалось отправить секретное медиа: {e}")
 
-    # Сохраняем сообщение в кэш (ограничиваем размер кэша до 30 последних записей для экономии ОЗУ)
     if len(messages_cache) > 30:
         oldest_key = next(iter(messages_cache))
         messages_cache.pop(oldest_key, None)
@@ -731,7 +736,6 @@ async def handle_business_message(message: types.Message):
         else:
             target_name = "тебя"
 
-        # Добавление/удаление РП-команд прямо из чата
         if message.from_user.id == owner_chat_id and lower_stripped.startswith((".дерп ", "/add_rp ")):
             raw = text_stripped.partition(" ")[2].strip()
             if "=" in raw:
@@ -760,13 +764,11 @@ async def handle_business_message(message: types.Message):
                 )
             return
 
-        # Обработка команд с точкой, слэшем или восклицательным знаком
         if text_stripped.startswith((".", "/", "!")):
             cmd_parts = text_stripped[1:].strip().split(maxsplit=1)
             cmd_word = cmd_parts[0].lower() if cmd_parts else ""
             cmd_arg = cmd_parts[1].strip() if len(cmd_parts) > 1 else ""
 
-            # Переключение режима AFK прямо из чата (для владельца)
             if cmd_word in ("афк", "afk") and message.from_user.id == owner_chat_id:
                 manual_afk = not manual_afk
                 if not manual_afk:
@@ -777,7 +779,6 @@ async def handle_business_message(message: types.Message):
                 )
                 return
 
-            # Вызов ИИ по команде .ии / .ai / .gpt
             if cmd_word in ("ии", "ai", "gpt", "нейро"):
                 prompt_text = cmd_arg
                 if not prompt_text and message.reply_to_message:
@@ -1014,7 +1015,6 @@ async def handle_business_message(message: types.Message):
                 )
                 return
 
-        # Проверка РП-команд
         clean_text = text_stripped.lstrip(".!/").strip()
         clean_lower = clean_text.lower()
         first_word = clean_lower.split()[0] if clean_lower else ""
@@ -1062,7 +1062,6 @@ async def handle_business_message(message: types.Message):
         # АВТООТВЕТЧИК ИИ, КОГДА ВЛАДЕЛЕЦ НЕ В СЕТИ
         if message.from_user.id != owner_chat_id and is_owner_offline():
             now = time.time()
-            # Небольшая задержка (15 сек) между автоответами в одном чате, чтобы не спамить на быстрые реплики
             if now - afk_last_reply_time.get(message.chat.id, 0) >= 15:
                 afk_last_reply_time[message.chat.id] = now
                 ai_reply = await ask_ai(
