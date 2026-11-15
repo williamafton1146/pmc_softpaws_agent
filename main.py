@@ -21,163 +21,111 @@ connections_cache = {}
 RP_FILE = "rp_commands.json"
 STATS_FILE = "chat_stats.json"
 
-# Базовые команды в фембойском/няшном стиле (с рандомными вариантами)
+# Нейтральные РП-команды в фембойском/няшном стиле (без женских окончаний)
 RP_ACTIONS = {
     "обнять": [
-        [
-            "🌸",
-            "крепко-крепко обнял(а)",
-            "и уткнулся(ась) носиком в плечо (づ｡◕‿‿◕｡)づ",
-        ],
-        ["🎀", "тепло обнял(а)", "и не хочет отпускать~ (⁄ ⁄•⁄ω⁄•⁄ ⁄)"],
-        ["💞", "заключил(а) в нежные объятия", "прижавшись всем телом uwu"],
+        ["🌸", "крепко-крепко обнял", " и уткнулся носиком в плечо (づ｡◕‿‿◕｡)づ"],
+        ["🎀", "тепло обнял", " и не хочет отпускать~ (⁄ ⁄•⁄ω⁄•⁄ ⁄)"],
+        ["💞", "заключил в нежные объятия", ", прижавшись всем телом uwu"],
     ],
     "поцеловать": [
-        ["💋", "нежно поцеловал(а)", "и смущённо отвёл(а) взгляд 👉👈"],
-        [
-            "💖",
-            "сладко поцеловал(а) в губки",
-            "покраснев до кончиков ушек (⁄ ⁄>⁄ ▽ ⁄<⁄ ⁄)",
-        ],
+        ["💋", "нежно поцеловал", " и смущённо отвёл взгляд 👉👈"],
+        ["💖", "сладко поцеловал в губки", ", покраснев до кончиков ушек (⁄ ⁄>⁄ ▽ ⁄<⁄ ⁄)"],
     ],
     "чмок": [
-        ["😚", "мило чмокнул(а) в щёчку", "оставив блестящий след~ ✨"],
-        ["🍓", "быстро чмокнул(а) в носик", "и тихонько хихикнул(а) :3"],
+        ["😚", "мило чмокнул в щёчку", ", оставив блестящий след~ ✨"],
+        ["🍓", "быстро чмокнул в носик", " и тихонько хихикнул :3"],
     ],
     "укусить": [
-        ["🐾", "игриво укусил(а)", "за плечико rawr~ (>_<)"],
-        ["😈", "легонько цапнул(а) острыми зубками", "и облизнулся(ась) :3"],
+        ["🐾", "игриво укусил", " за плечико rawr~ (>_<)"],
+        ["😈", "легонько цапнул острыми зубками", " и облизнулся :3"],
     ],
     "кусь": [
-        ["🦷", "сделал(а) нежный кусь", "за ушко и мило засопел(а)~ 🌸"],
-        ["🐱", "по-кошачьи кусьнул(а)", "за пальчик ня~ (=^･ω･^=)"],
-        ["🐾", "сделал(а) внезапный кусь", "виляя хвостиком uwu"],
+        ["🦷", "сделал нежный кусь", " за ушко и мило засопел~ 🌸"],
+        ["🐱", "по-кошачьи кусьнул", " за пальчик ня~ (=^･ω･^=)"],
+        ["🐾", "сделал внезапный кусь", ", виляя хвостиком uwu"],
     ],
     "погладить": [
-        [
-            "🌷",
-            "ласково погладил(а) по головке",
-            "перебирая мягкие волосы ( ´ ∀ `)ノ～ ♡",
-        ],
-        ["🐾", "нежно почесал(а) за ушком", "вызывая довольное мурчание~ uwu"],
+        ["🌷", "ласково погладил по головке", ", перебирая мягкие волосы ( ´ ∀ `)ノ～ ♡"],
+        ["🐾", "нежно почесал за ушком", ", вызывая довольное мурчание~ uwu"],
     ],
     "ударить": [
-        ["🎀", "обиженно стукнул(а) мягкой лапкой", "надув щёчки ( ` ω ´ )"],
-        ["💥", "плюхнул(а) пушистой розовой подушкой", "прямо по лицу! >_<"],
-        ["🐾", "провёл(а) серию сокрушительных кошачьих лапок по", "ня-пауч! 🥊"],
+        ["🎀", "обиженно стукнул мягкой лапкой", ", надув щёчки ( ` ω ´ )"],
+        ["💥", "плюхнул пушистой розовой подушкой", " прямо по лицу! >_<"],
+        ["🐾", "провёл серию сокрушительных кошачьих лапок по", " ня-пауч! 🥊"],
     ],
     "шлёп": [
-        ["🍑", "звонко и игриво шлёпнул(а)", "по попке~ (⁄ ⁄>⁄ ▽ ⁄<⁄ ⁄)"],
-        ["👋", "хитро шлёпнул(а)", "и спрятал(а) ручки за спину :3"],
+        ["🍑", "звонко и игриво шлёпнул", " по попке~ (⁄ ⁄>⁄ ▽ ⁄<⁄ ⁄)"],
+        ["👋", "хитро шлёпнул", " и спрятал ручки за спину :3"],
     ],
     "пнуть": [
-        ["🧦", "слегка пнул(а) ножкой в полосатом чулочке", "под столом 👉👈"],
-        ["👟", "дал(а) милого волшебного пенделя", "для ускорения~ ✨"],
+        ["🧦", "слегка пнул ножкой в полосатом чулочке", " под столом 👉👈"],
+        ["👟", "дал милого волшебного пенделя", " для ускорения~ ✨"],
     ],
     "похвалить": [
-        ["🌟", "похвалил(а)", "и назвал(а) самым сладким котиком на свете (◕‿◕)♡"],
-        ["🍬", "восхитился(ась) успехами", "и подарил(а) блестящую наклеечку~ ✨"],
+        ["🌟", "похвалил", ", назвав самым сладким котиком на свете (◕‿◕)♡"],
+        ["🍬", "восхитился успехами", " и подарил блестящую наклеечку~ ✨"],
     ],
     "пожать руку": [
-        ["🤝", "аккуратно пожал(а) ручку", "своими мягкими лапками uwu"],
-        ["🤍", "переплёл(а) пальчики с", "и мило улыбнулся(ась) (´• ω •`)"],
+        ["🤝", "аккуратно пожал ручку", " своими мягкими лапками uwu"],
+        ["🤍", "переплёл пальчики с", " и мило улыбнулся (´• ω •`)"],
     ],
     "покормить": [
-        [
-            "🍓",
-            "покормил(а) клубничкой с ложечки",
-            "сказав «открывай ротик, ам~» ( ˘▽˘)っ♨",
-        ],
-        ["🧋", "угостил(а) сладким клубничным бабл-ти", "и вкусняшкой~ 🧁"],
-        ["🍰", "поделился(ась) нежным тортиком с", "uwu 💕"],
+        ["🍓", "покормил клубничкой с ложечки", " сказав «открывай ротик, ам~» ( ˘▽˘)っ♨"],
+        ["🧋", "угостил сладким клубничным бабл-ти", " и вкусняшкой~ 🧁"],
+        ["🍰", "поделился нежным тортиком с", " uwu 💕"],
     ],
     "щекотать": [
-        ["🪶", "защекотал(а) до милого писка", "и звонкого смеха~ (≧◡≦)"],
-        ["🐾", "устроил(а) пушистую атаку щекоткой на", "ня~ :3"],
+        ["🪶", "защекотал до милого писка", " и звонкого смеха~ (≧◡≦)"],
+        ["🐾", "устроил пушистую атаку щекоткой на", " ня~ :3"],
     ],
     "лизнуть": [
-        ["👅", "внезапно лизнул(а) прямо в носик", "как маленький котёнок (=^･ｪ･^=)"],
-        ["🍦", "сладко лизнул(а) в щёчку", "и жутко засмущался(ась) (⁄ ⁄•⁄ω⁄•⁄ ⁄)"],
+        ["👅", "внезапно лизнул прямо в носик", " как маленький котёнок (=^･ｪ･^=)"],
+        ["🍦", "сладко лизнул в щёчку", " и жутко засмущался (⁄ ⁄•⁄ω⁄•⁄ ⁄)"],
     ],
     "выстрелить": [
-        [
-            "💘",
-            "пустил(а) розовую стрелу Амура прямо в сердечко",
-            "пиу-пиу~ ( ´ ▽ ` )b",
-        ],
-        ["🔫", "обрызгал(а) из милого водяного пистолетика", "хихикая >w<"],
+        ["💘", "пустил розовую стрелу Амура прямо в сердечко", " пиу-пиу~ ( ´ ▽ ` )b"],
+        ["🔫", "обрызгал из милого водяного пистолетика", " хихикая >w<"],
     ],
     "мур": [
-        ["🐱", "прижался(ась) к", "и сладко замурчал(а) на ушко мур-мур~ (=^･ω･^=)"],
-        ["🐾", "потёрся(ась) носиком о", "тихонько мурлыкая uwu"],
+        ["🐱", "прижался к", " и сладко замурчал на ушко мур-мур~ (=^･ω･^=)"],
+        ["🐾", "потёрся носиком о", " тихонько мурлыкая uwu"],
     ],
     "прижаться": [
-        ["🥺", "смущённо прижался(ась) к", "ища тепла и ласки 👉👈"],
-        ["🎀", "уютно свернулся(ась) калачиком рядом с", "(づ◡﹏◡)づ"],
+        ["🥺", "смущённо прижался к", " ища тепла и ласки 👉👈"],
+        ["🎀", "уютно свернулся калачиком рядом с", " (づ◡﹏◡)づ"],
     ],
     "монстр": [
-        [
-            "🥫",
-            "протянул(а) холодную баночку белого Monster Energy для",
-            "и мило подмигнул(а) uwu 🤍",
-        ],
-        [
-            "⚡",
-            "поделился(ась) глоточком розового Monster Pipeline Punch с",
-            "для заряда бодрости~ 🌸",
-        ],
+        ["🥫", "протянул холодную баночку белого Monster Energy для", " и мило подмигнул uwu 🤍"],
+        ["⚡", "поделился глоточком розового Monster Pipeline Punch с", " для заряда бодрости~ 🌸"],
     ],
     "наручки": [
-        ["🥺", "тянет лапки вверх и просится на ручки к", "ну возьмиии~ 👉👈"],
-        [
-            "🐾",
-            "запрыгнул(а) прямо на ручки к",
-            "и довольно болтает ножками в чулочках (◕‿◕)♡",
-        ],
+        ["🥺", "тянет лапки вверх и просится на ручки к", " ну возьмиии~ 👉👈"],
+        ["🐾", "запрыгнул прямо на ручки к", " и довольно болтает ножками в чулочках (◕‿◕)♡"],
     ],
     "чокер": [
-        [
-            "🔔",
-            "аккуратно застегнул(а) бархатный чокер с бубенчиком на шейке",
-            "дзынь-дзынь~ 🎀",
-        ],
-        [
-            "🖤",
-            "поправил(а) милый чокер с сердечком на",
-            "и восхищённо улыбнулся(ась) uwu",
-        ],
+        ["🔔", "аккуратно застегнул бархатный чокер с бубенчиком на шейке", " дзынь-дзынь~ 🎀"],
+        ["🖤", "поправил милый чокер с сердечком на", " и восхищённо улыбнулся uwu"],
     ],
     "смутиться": [
-        [
-            "😳",
-            "закрыл(а) раскрасневшееся личико рукавами оверсайз-худи из-за",
-            "(⁄ ⁄>⁄ ▽ ⁄<⁄ ⁄)",
-        ],
-        ["👉👈", "сильно засмущался(ась) перед", "и спрятал(а) глазки под чёлкой~ 🌸"],
+        ["😳", "закрыл раскрасневшееся личико рукавами оверсайз-худи из-за", " (⁄ ⁄>⁄ ▽ ⁄<⁄ ⁄)"],
+        ["👉👈", "сильно засмущался перед", " и спрятал глазки под чёлкой~ 🌸"],
     ],
     "обидеться": [
-        [
-            "💢",
-            "надул(а) щёчки, отвернулся(ась) от",
-            "и тихонько фыркнул(а) ( ` ω ´ )💨",
-        ],
-        ["🥺", "обиженно сложил(а) лапки на груди и ждёт извинений от", "хмпф!"],
+        ["💢", "надул щёчки, отвернулся от", " и тихонько фыркнул ( ` ω ´ )💨"],
+        ["🥺", "обиженно сложил лапки на груди и ждёт извинений от", " хмпф!"],
     ],
     "одеялко": [
-        [
-            "🛌",
-            "укутал(а) в тёплое пушистое одеялко",
-            "как маленькую шаурму и лёг(ла) рядышком~ 🌸",
-        ],
-        ["☁️", "накрыл(а) мягким пледиком", "чтобы точно не замёрз(ла) uwu 💕"],
+        ["🛌", "укутал в тёплое пушистое одеялко", " как маленькую шаурму и лёг рядышком~ 🌸"],
+        ["☁️", "накрыл мягким пледиком", " чтобы точно не замёрз uwu 💕"],
     ],
     "хвостик": [
-        ["🐾", "радостно завилял(а) пушистым хвостиком при виде", "ура-ура~ ✨"],
-        ["🦊", "обвил(а) пушистым хвостиком вокруг", "нежно прижимая к себе :3"],
+        ["🐾", "радостно завилял пушистым хвостиком при виде", " ура-ура~ ✨"],
+        ["🦊", "обвил пушистым хвостиком вокруг", " нежно прижимая к себе :3"],
     ],
 }
 
-# Английские алиасы для команд со слэшем (/hug, /kiss и т.д.)
+# Английские алиасы для команд со слэшем
 SLASH_RP_ALIASES = {
     "hug": "обнять",
     "kiss": "поцеловать",
@@ -204,9 +152,6 @@ SLASH_RP_ALIASES = {
     "blanket": "одеялко",
     "tail": "хвостик",
 }
-
-
-# ==================== РАБОТА С ФАЙЛАМИ И БАЗОЙ ====================
 
 
 def save_rp_commands(commands_dict: dict):
@@ -258,6 +203,7 @@ def get_chat_stat(chat_id: int, partner_name: str = "Собеседник") -> d
             "rp_breakdown": {},
             "deleted_caught": 0,
             "edited_caught": 0,
+            "secret_media_caught": 0,
             "married_since": None,
         }
     elif partner_name and partner_name != "Собеседник":
@@ -275,18 +221,10 @@ def format_rp_action(action_data) -> tuple[str, str, str]:
 
 
 def uwuify_text(text: str) -> str:
-    """Переводит обычный текст на няшно-картавый uwu-язык."""
     replacements = [
-        ("р", "в"),
-        ("л", "в"),
-        ("Р", "В"),
-        ("Л", "В"),
-        ("на", "ня"),
-        ("На", "Ня"),
-        ("но", "ньо"),
-        ("Но", "Ньо"),
-        ("привет", "пвиветик"),
-        ("Привет", "Пвиветик"),
+        ("р", "в"), ("л", "в"), ("Р", "В"), ("Л", "В"),
+        ("на", "ня"), ("На", "Ня"), ("но", "ньо"), ("Но", "Ньо"),
+        ("привет", "пвиветик"), ("Привет", "Пвиветик"),
     ]
     res = text
     for old, new in replacements:
@@ -315,10 +253,7 @@ async def get_owner_chat_id(business_connection_id: str) -> int:
     return connections_cache[business_connection_id]
 
 
-async def send_business_reply(
-    chat_id: int, text: str, conn_id: str, chat_name: str = ""
-):
-    """Безопасная отправка сообщения в бизнес-чат с защитой от ошибок."""
+async def send_business_reply(chat_id: int, text: str, conn_id: str, chat_name: str = ""):
     try:
         await bot.send_message(
             chat_id=chat_id,
@@ -356,7 +291,7 @@ async def cmd_start(message: types.Message):
         "• /rp — посмотреть все доступные РП-действия\n"
         "• /add_rp — создать свою собственную РП-команду\n"
         "• /del_rp — удалить ненужную команду\n\n"
-        "<i>🐾 Сюда автоматически прилетают все удалённые и изменённые сообщения твоих собеседников!</i>",
+        "<i>🐾 Сюда автоматически прилетают все удалённые, изменённые и исчезающие фото твоих собеседников!</i>",
         parse_mode="HTML",
     )
 
@@ -366,22 +301,23 @@ async def cmd_help(message: types.Message):
     await message.answer(
         "🎀 <b>Полная инструкция по боту (⁄ ⁄•⁄ω⁄•⁄ ⁄):</b>\n\n"
         "<b>1. 🎭 РП-команды (в личке с друзьями):</b>\n"
-        "Пиши с точкой, со слэшем или просто словом: <code>.обнять</code>, <code>.монстр</code>, "
-        "<code>.наручки</code>, <code>.чокер</code>, <code>.кусь за ушко</code> (полный список: /rp).\n\n"
+        "Пиши с точкой, со слэшем или словом: <code>.обнять</code>, <code>.монстр</code>, "
+        "<code>.наручки</code>, <code>.чокер</code> (полный список: /rp).\n\n"
         "<b>2. 🎲 Мини-игры и рандомайзеры:</b>\n"
         "• <code>.инфа [текст]</code> или <code>.шар [текст]</code> — вероятность события в %\n"
         "• <code>.шип</code> или <code>.любовь</code> — ваша совместимость с собеседником\n"
         "• <code>.милота</code> или <code>.фембойтест</code> — тест на % няшности\n"
         "• <code>.выбор А или Б</code> — поможет выбрать между двумя вариантами\n"
         "• <code>.uwu</code> (ответом на сообщение) — переведёт текст друга на няшный язык\n\n"
-        "<b>3. 💍 Отношения и статистика чата:</b>\n"
-        "• <code>.брак</code> — пожениться с собеседником в личке\n"
-        "• <code>.мы</code> — сколько времени вы уже в браке\n"
+        "<b>3. 💍 Отношения, статистика и секреты:</b>\n"
+        "• <b>Самоуничтожающиеся фото</b> сохраняются сюда автоматически! 📸✨\n"
+        "• <code>.брак</code> — пожениться с собеседником\n"
+        "• <code>.мы</code> — сколько времени в браке\n"
         "• <code>.развод</code> — расторгнуть брак 💔\n"
-        "• <code>.стата</code> — статистика сообщений и обнимашек в чате\n"
-        "• <code>.инфо</code> — карточка собеседника (ID, юзернейм, сколько удалёнок поймано)\n\n"
+        "• <code>.стата</code> — статистика сообщений и обнимашек\n"
+        "• <code>.инфо</code> — карточка собеседника (ID, поманченные секреты)\n\n"
         "<b>4. ➕ Свои РП-команды без кода:</b>\n"
-        "Добавить: <code>/add_rp боньк = сделал(а) мягкий боньк 🐾</code>\n"
+        "Добавить: <code>/add_rp боньк = сделал мягкий боньк 🐾</code>\n"
         "Удалить: <code>/del_rp боньк</code>",
         parse_mode="HTML",
     )
@@ -390,27 +326,24 @@ async def cmd_help(message: types.Message):
 @dp.message(Command("rp"))
 async def cmd_rp_list(message: types.Message):
     if not RP_COMMANDS:
-        await message.answer(
-            "Список РП-команд пока пуст 🥺 Добавь первую через /add_rp!"
-        )
+        await message.answer("Список РП-команд пока пуст 🥺 Добавь первую через /add_rp!")
         return
-
-    reverse_aliases = {v: f" (<code>/{k}</code>)" for k, v in SLASH_RP_ALIASES.items()}
 
     lines = []
     for cmd, act_data in RP_COMMANDS.items():
         emoji, verb, _ = format_rp_action(act_data)
-        alias_str = reverse_aliases.get(cmd, "")
-        lines.append(
-            f"🌸 {emoji} <code>.{cmd}</code>{alias_str} — <i>{html.escape(verb)}~</i>"
-        )
+        safe_verb = html.escape(str(verb))
+        # Никаких угловых скобок и тегов внутри, чистый текст с разметкой через дефис
+        lines.append(f"{emoji} .{cmd} — {safe_verb}~")
 
     text = (
-        "🎀 <b>Няшный список РП-команд (⁄ ⁄>⁄ ▽ ⁄<⁄ ⁄):</b>\n\n"
+        "🎀 Доступные РП-команды (⁄ ⁄>⁄ ▽ ⁄<⁄ ⁄):\n\n"
         + "\n".join(lines)
-        + "\n\n➕ <b>Добавить свою команду:</b>\n<code>/add_rp слово = действие</code> ✨"
+        + "\n\n➕ Добавить свою команду:\n/add_rp слово = действие ✨"
     )
-    await message.answer(text, parse_mode="HTML")
+    
+    # Отправляем вообще без parse_mode="HTML", чтобы Telegram точно не ругался на символы
+    await message.answer(text)
 
 
 @dp.message(Command("add_rp"))
@@ -419,7 +352,7 @@ async def cmd_add_rp(message: types.Message):
     if "=" not in raw:
         await message.answer(
             "🎀 <b>Чтобы добавить команду, напиши её через знак <code>=</code>:</b>\n\n"
-            "Пример:\n<code>/add_rp боньк = сделал(а) мягкий боньк по головке 🐾</code>",
+            "Пример:\n<code>/add_rp боньк = сделал мягкий боньк по головке 🐾</code>",
             parse_mode="HTML",
         )
         return
@@ -481,11 +414,30 @@ async def handle_business_message(message: types.Message):
     chat_stat["messages"] += 1
     save_stats(CHAT_STATS)
 
+    # ЛОВУШКА ВСЕХ ФОТОГРАФИЙ (включая секретные и исчезающие)
+    if message.photo and message.via_bot is None:
+        chat_stat["secret_media_caught"] += 1
+        save_stats(CHAT_STATS)
+        
+        sender = html.escape(message.from_user.full_name)
+        file_id = message.photo[-1].file_id
+        caption = html.escape(message.caption or "[без подписи]")
+        
+        try:
+            await bot.send_photo(
+                chat_id=owner_chat_id,
+                photo=file_id,
+                caption=f"📸✨ <b>Поймано фото / секретка</b> от <b>{sender}</b>:\n\n<blockquote>{caption}</blockquote>",
+                parse_mode="HTML"
+            )
+            print(f"[СЕКРЕТ] Перехвачено фото/секретка от {sender}")
+        except Exception as e:
+            print(f"[!] Не удалось переслать фото: {e}")
+
     if message.text:
         text_stripped = message.text.strip()
         lower_stripped = text_stripped.lower()
 
-        # Определяем имена участников для интерактивных команд
         sender_name = html.escape(message.from_user.full_name)
         if message.reply_to_message and message.reply_to_message.from_user:
             target_name = html.escape(message.reply_to_message.from_user.full_name)
@@ -494,10 +446,7 @@ async def handle_business_message(message: types.Message):
         else:
             target_name = "тебя"
 
-        # 1. Управление пользовательскими командами прямо из лички (.дерп / .удрп)
-        if message.from_user.id == owner_chat_id and lower_stripped.startswith(
-            (".дерп ", "/add_rp ")
-        ):
+        if message.from_user.id == owner_chat_id and lower_stripped.startswith((".дерп ", "/add_rp ")):
             raw = text_stripped.partition(" ")[2].strip()
             if "=" in raw:
                 cmd_name, action_text = raw.split("=", maxsplit=1)
@@ -513,9 +462,7 @@ async def handle_business_message(message: types.Message):
                     )
             return
 
-        if message.from_user.id == owner_chat_id and lower_stripped.startswith(
-            (".удрп ", "/del_rp ")
-        ):
+        if message.from_user.id == owner_chat_id and lower_stripped.startswith((".удрп ", "/del_rp ")):
             cmd_name = text_stripped.partition(" ")[2].strip().lower().lstrip(".!/")
             if cmd_name in RP_COMMANDS:
                 del RP_COMMANDS[cmd_name]
@@ -527,13 +474,11 @@ async def handle_business_message(message: types.Message):
                 )
             return
 
-        # 2. МИНИ-ИГРЫ И СТАТИСТИКА (срабатывают с точкой, слэшем или !)
         if text_stripped.startswith((".", "/", "!")):
             cmd_parts = text_stripped[1:].strip().split(maxsplit=1)
             cmd_word = cmd_parts[0].lower() if cmd_parts else ""
             cmd_arg = cmd_parts[1].strip() if len(cmd_parts) > 1 else ""
 
-            # --- .инфа / .шар ---
             if cmd_word in ("инфа", "шар", "infa", "ball"):
                 if not cmd_arg:
                     await send_business_reply(
@@ -544,11 +489,7 @@ async def handle_business_message(message: types.Message):
                     )
                     return
                 pct = random.randint(0, 100)
-                verdict = (
-                    "Ура-ура, почти наверняка! (◕‿◕)♡"
-                    if pct >= 50
-                    else "Кажется, шансов маловато... 🥺👉👈"
-                )
+                verdict = "Ура-ура, почти наверняка! (◕‿◕)♡" if pct >= 50 else "Кажется, шансов маловато... 🥺👉👈"
                 await send_business_reply(
                     message.chat.id,
                     f"🔮 <b>Шар судьбы мурлычет:</b>\n"
@@ -559,7 +500,6 @@ async def handle_business_message(message: types.Message):
                 )
                 return
 
-            # --- .шип / .любовь ---
             if cmd_word in ("шип", "любовь", "ship", "love"):
                 pct = random.randint(0, 100)
                 if pct >= 85:
@@ -580,7 +520,6 @@ async def handle_business_message(message: types.Message):
                 )
                 return
 
-            # --- .милота / .фембойтест ---
             if cmd_word in ("милота", "фембойтест", "няшность", "cute", "femboy"):
                 tested_user = (
                     html.escape(message.reply_to_message.from_user.full_name)
@@ -593,9 +532,7 @@ async def handle_business_message(message: types.Message):
                 elif pct <= 55:
                     rank = "Начинающий котик, уже засматривается на розовые оверсайз-худи 👉👈"
                 elif pct <= 85:
-                    rank = (
-                        "Сертифицированная милашка, кошачьи ушки сидят как влитые! 🐾🌸"
-                    )
+                    rank = "Сертифицированная милашка, кошачьи ушки сидят как влитые! 🐾🌸"
                 else:
                     rank = "Ультра-фембойчик 1000 lvl в полосатых чулочках и с баночкой белого Монстра! 🧦🥫💖"
                 await send_business_reply(
@@ -608,7 +545,6 @@ async def handle_business_message(message: types.Message):
                 )
                 return
 
-            # --- .выбор ---
             if cmd_word in ("выбор", "choose", "или"):
                 if " или " not in cmd_arg.lower():
                     await send_business_reply(
@@ -631,15 +567,10 @@ async def handle_business_message(message: types.Message):
                 )
                 return
 
-            # --- .uwu ---
             if cmd_word == "uwu":
                 source_text = cmd_arg
                 if not source_text and message.reply_to_message:
-                    source_text = (
-                        message.reply_to_message.text
-                        or message.reply_to_message.caption
-                        or ""
-                    )
+                    source_text = message.reply_to_message.text or message.reply_to_message.caption or ""
                 if not source_text:
                     await send_business_reply(
                         message.chat.id,
@@ -656,7 +587,6 @@ async def handle_business_message(message: types.Message):
                 )
                 return
 
-            # --- .брак / .развод / .мы ---
             if cmd_word in ("брак", "marry"):
                 if chat_stat.get("married_since"):
                     dur = format_duration(int(time.time() - chat_stat["married_since"]))
@@ -722,7 +652,6 @@ async def handle_business_message(message: types.Message):
                     )
                 return
 
-            # --- .стата / /stats ---
             if cmd_word in ("стата", "stats"):
                 married_str = (
                     f"💍 В браке ({format_duration(int(time.time() - chat_stat['married_since']))})"
@@ -732,9 +661,7 @@ async def handle_business_message(message: types.Message):
                 breakdown = chat_stat.get("rp_breakdown", {})
                 top_rp = sorted(breakdown.items(), key=lambda x: x[1], reverse=True)[:5]
                 top_lines = (
-                    "\n".join(
-                        [f"  • <code>.{k}</code> — {v} раз(а)" for k, v in top_rp]
-                    )
+                    "\n".join([f"  • <code>.{k}</code> — {v} раз(а)" for k, v in top_rp])
                     if top_rp
                     else "  Пока ни одной команды 🥺"
                 )
@@ -743,6 +670,7 @@ async def handle_business_message(message: types.Message):
                     f"📊 <b>Няшная статистика чата с {html.escape(partner_title)}:</b>\n\n"
                     f"💬 <b>Сообщений записано:</b> {chat_stat['messages']}\n"
                     f"🎭 <b>Всего РП-действий:</b> {chat_stat['rp_total']}\n"
+                    f"📸 <b>Исчезающих фото поймано:</b> {chat_stat.get('secret_media_caught', 0)}\n"
                     f"💖 <b>Статус:</b> {married_str}\n\n"
                     f"🏆 <b>Топ ваших действий:</b>\n{top_lines}",
                     conn_id,
@@ -750,11 +678,8 @@ async def handle_business_message(message: types.Message):
                 )
                 return
 
-            # --- .инфо / /info ---
             if cmd_word in ("инфо", "info"):
-                uname = (
-                    f"@{message.chat.username}" if message.chat.username else "скрыт"
-                )
+                uname = f"@{message.chat.username}" if message.chat.username else "скрыт"
                 await send_business_reply(
                     message.chat.id,
                     f"🪪 <b>Карточка котика {html.escape(partner_title)}:</b>\n\n"
@@ -762,13 +687,13 @@ async def handle_business_message(message: types.Message):
                     f"🔗 <b>Юзернейм:</b> {uname}\n"
                     f"💬 <b>Сообщений в базе:</b> {chat_stat['messages']}\n"
                     f"✏️ <b>Изменено сообщений:</b> {chat_stat['edited_caught']}\n"
-                    f"🐾 <b>Удалено сообщений:</b> {chat_stat['deleted_caught']}",
+                    f"🐾 <b>Удалено сообщений:</b> {chat_stat['deleted_caught']}\n"
+                    f"📸 <b>Секретных фоток сохранено:</b> {chat_stat.get('secret_media_caught', 0)}",
                     conn_id,
                     partner_title,
                 )
                 return
 
-        # 3. Проверяем срабатывание RP-команд (русские, двухсловные и английские алиасы)
         clean_text = text_stripped.lstrip(".!/").strip()
         clean_lower = clean_text.lower()
         first_word = clean_lower.split()[0] if clean_lower else ""
@@ -798,7 +723,6 @@ async def handle_business_message(message: types.Message):
                 else ""
             )
 
-            # Обновляем счётчик РП-действий в статистике
             chat_stat["rp_total"] += 1
             chat_stat["rp_breakdown"][matched_cmd] = (
                 chat_stat["rp_breakdown"].get(matched_cmd, 0) + 1
@@ -814,7 +738,6 @@ async def handle_business_message(message: types.Message):
             print(f"[RP] Отправлена команда '{matched_cmd}' в чат с {partner_title}")
             return
 
-    # 4. Сохраняем сообщение в кэш на случай удаления или редактирования
     media_type = None
     file_id = None
 
@@ -943,7 +866,7 @@ async def handle_deleted_business_messages(event: types.BusinessMessagesDeleted)
 
 async def main():
     await setup_bot_commands()
-    print("🌸 Бот успешно запущен со всеми мини-играми и статистикой!")
+    print("🌸 Бот успешно запущен со всеми мини-играми, нейтральным РП и перехватом секретных фото!")
     await dp.start_polling(bot)
 
 
