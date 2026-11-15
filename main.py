@@ -708,21 +708,23 @@ async def handle_business_message(message: types.Message):
             except Exception as e:
                 print(f"[!] Не удалось отправить секретное медиа: {e}")
 
-    if len(messages_cache) > 30:
-        oldest_key = next(iter(messages_cache))
-        messages_cache.pop(oldest_key, None)
+# Запоминаем в кэш только сообщения собеседника (свои пропускаем)
+    if message.from_user.id != owner_chat_id:
+        if len(messages_cache) > 30:
+            oldest_key = next(iter(messages_cache))
+            messages_cache.pop(oldest_key, None)
 
-    messages_cache[(message.chat.id, message.message_id)] = {
-        "sender_id": message.from_user.id,
-        "sender_name": message.from_user.full_name,
-        "text": message.text or message.caption or "",
-        "media_type": media_type,
-        "file_id": file_id,
-        "raw_bytes": raw_bytes,
-    }
-    print(
-        f"[КЭШ] Запомнил сообщение от {message.from_user.full_name}: {message.text or f'[{media_type}]'}"
-    )
+        messages_cache[(message.chat.id, message.message_id)] = {
+            "sender_id": message.from_user.id,
+            "sender_name": message.from_user.full_name,
+            "text": message.text or message.caption or "",
+            "media_type": media_type,
+            "file_id": file_id,
+            "raw_bytes": raw_bytes,
+        }
+        print(
+            f"[КЭШ] Запомнил сообщение от {message.from_user.full_name}: {message.text or f'[{media_type}]'}"
+        )
 
     if message.text:
         text_stripped = message.text.strip()
