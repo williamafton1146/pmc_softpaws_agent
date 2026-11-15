@@ -1,5 +1,6 @@
 import asyncio
 import html
+import io
 import json
 import os
 import random
@@ -7,22 +8,30 @@ import time
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command, CommandStart
 from aiogram.exceptions import TelegramBadRequest
-from aiogram.types import BotCommand
-from openai import AsyncOpenAI  # Для работы с ИИ через OpenRouter
+from aiogram.types import BotCommand, BufferedInputFile
+from openai import AsyncOpenAI
 
 BOT_TOKEN = "8826988522:AAGz9EZjjhcEhjjlOCSKEBjb6cPRc6QRw2U"
 
-# Настройка ИИ с твоим ключом OpenRouter
+# Подключение к ИИ через твой ключ и сайт provod.ai
 AI_CLIENT = AsyncOpenAI(
     api_key="sk_f3690e852e2088bacc4bee7017e56bbd74beafccc2ae2672",
-    base_url="https://openrouter.ai/api/v1"
+    base_url="https://api.provod.ai/v1",
 )
+ACTIVE_AI_MODEL = None
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
 messages_cache = {}
 connections_cache = {}
+ai_history = {}  # Память диалогов для ИИ
+
+# Настройки режима «Не в сети» (AFK)
+AFK_TIMEOUT = 300  # 5 минут (300 секунд) без твоих сообщений = режим «не в сети»
+last_owner_activity = time.time()
+manual_afk = False
+afk_last_reply_time = {}  # Чтобы бот не спамил на каждое сообщение подряд
 
 # Файлы для сохранения данных
 RP_FILE = "rp_commands.json"
@@ -134,13 +143,30 @@ RP_ACTIONS = {
 
 # Английские алиасы для команд со слэшем
 SLASH_RP_ALIASES = {
-    "hug": "обнять", "kiss": "поцеловать", "chmok": "чмок", "bite": "укусить",
-    "kus": "кусь", "pat": "погладить", "slap": "ударить", "spank": "шлёп",
-    "kick": "пнуть", "praise": "похвалить", "handshake": "пожать руку",
-    "feed": "покормить", "tickle": "щекотать", "lick": "лизнуть",
-    "shoot": "выстрелить", "purr": "мур", "cuddle": "прижаться",
-    "monster": "монстр", "upp": "наручки", "choker": "чокер",
-    "blush": "смутиться", "pout": "обидеться", "blanket": "одеялко", "tail": "хвостик",
+    "hug": "обнять",
+    "kiss": "поцеловать",
+    "chmok": "чмок",
+    "bite": "укусить",
+    "kus": "кусь",
+    "pat": "погладить",
+    "slap": "ударить",
+    "spank": "шлёп",
+    "kick": "пнуть",
+    "praise": "похвалить",
+    "handshake": "пожать руку",
+    "feed": "покормить",
+    "tickle": "щекотать",
+    "lick": "лизнуть",
+    "shoot": "выстрелить",
+    "purr": "мур",
+    "cuddle": "прижаться",
+    "monster": "монстр",
+    "upp": "наручки",
+    "choker": "чокер",
+    "blush": "смутиться",
+    "pout": "обидеться",
+    "blanket": "одеялко",
+    "tail": "хвостик",
 }
 
 
@@ -187,9 +213,14 @@ def get_chat_stat(chat_id: int, partner_name: str = "Собеседник") -> d
     cid = str(chat_id)
     if cid not in CHAT_STATS:
         CHAT_STATS[cid] = {
-            "partner_name": partner_name, "messages": 0, "rp_total": 0,
-            "rp_breakdown": {}, "deleted_caught": 0, "edited_caught": 0,
-            "secret_media_caught": 0, "married_since": None,
+            "partner_name": partner_name,
+            "messages": 0,
+            "rp_total": 0,
+            "rp_breakdown": {},
+            "deleted_caught": 0,
+            "edited_caught": 0,
+            "secret_media_caught": 0,
+            "married_since": None,
         }
     elif partner_name and partner_name != "Собеседник":
         CHAT_STATS[cid]["partner_name"] = partner_name
@@ -223,10 +254,110 @@ def format_duration(seconds: int) -> str:
     hours = (seconds % 86400) // 3600
     minutes = (seconds % 3600) // 60
     parts = []
-    if days > 0: parts.append(f"{days} дн.")
-    if hours > 0 or days > 0: parts.append(f"{hours} ч.")
+    if days > 0:
+        parts.append(f"{days} дн.")
+    if hours > 0 or days > 0:
+        parts.append(f"{hours} ч.")
     parts.append(f"{minutes} мин.")
     return " ".join(parts)
+
+
+def is_owner_offline() -> bool:
+    """Проверяет, находится ли владелец в режиме 'Не в сети'"""
+    if manual_afk:
+        return True
+    return (time.time() - last_owner_activity) >= AFK_TIMEOUT
+
+
+async def resolve_ai_model() -> str:
+    """Автоматически находит рабочую модель на provod.ai"""
+    global ACTIVE_AI_MODEL
+    if ACTIVE_AI_MODEL:
+        return ACTIVE_AI_MODEL
+
+    preferred = [
+        "llama-3.3-70b-instruct",
+        "meta-llama/llama-3.3-70b-instruct",
+        "llama-3.3-70b-versatile",
+        "gpt-4o-mini",
+        "deepseek-chat",
+        "gpt-3.5-turbo",
+    ]
+    try:
+        models_page = await AI_CLIENT.models.list()
+        available_ids = [m.id for m in models_page.data]
+        print(f"[ИИ] Доступные модели на ключе: {available_ids[:10]}")
+        for pref in preferred:
+            if pref in available_ids:
+                ACTIVE_AI_MODEL = pref
+                return ACTIVE_AI_MODEL
+        for mid in available_ids:
+            if any(k in mid.lower() for k in ("llama", "gpt", "deepseek", "claude", "qwen", "gemini")):
+                ACTIVE_AI_MODEL = mid
+                return ACTIVE_AI_MODEL
+        if available_ids:
+            ACTIVE_AI_MODEL = available_ids[0]
+            return ACTIVE_AI_MODEL
+    except Exception as e:
+        print(f"[!] Не удалось получить список моделей автоматически: {e}")
+
+    ACTIVE_AI_MODEL = "gpt-4o-mini"
+    return ACTIVE_AI_MODEL
+
+
+async def ask_ai(chat_id: int, user_text: str, mode: str = "normal", partner_name: str = "Собеседник") -> str:
+    """Отправляет запрос к ИИ с сохранением короткой памяти диалога"""
+    global ACTIVE_AI_MODEL
+    model_name = await resolve_ai_model()
+
+    if mode == "afk":
+        system_prompt = (
+            f"Ты милый, ласковый фембойчик-ассистент из ЧВК «Мягкие Лапки». "
+            f"Владелец аккаунта сейчас не в сети (отдыхает или занят), поэтому ты временно отвечаешь его собеседнику по имени {partner_name}. "
+            f"Отвечай дружелюбно, коротко, в няшном стиле с каомодзи (uwu, :3, 👉👈, (◕‿◕)♡), "
+            f"иногда упоминай пушистые чулочки, обнимашки или баночку белого Monster Energy. "
+            f"Используй только мужской род по отношению к себе (например: «я увидел», «я передал», «я решил»)."
+        )
+    else:
+        system_prompt = (
+            "Ты милый, умный и ласковый фембойчик-ассистент из ЧВК «Мягкие Лапки». "
+            "Отвечай полезно, понятно и с душой, добавляя милые каомодзи (uwu, :3, 👉👈, (⁄ ⁄•⁄ω⁄•⁄ ⁄)). "
+            "Используй только мужской род по отношению к себе (например: «я подумал», «я нашёл», «я сделал»)."
+        )
+
+    history = ai_history.setdefault(chat_id, [])
+    history.append({"role": "user", "content": user_text})
+    if len(history) > 8:
+        history[:] = history[-8:]
+
+    messages_payload = [{"role": "system", "content": system_prompt}] + history
+
+    fallback_models = [
+        model_name,
+        "gpt-4o-mini",
+        "llama-3.3-70b-instruct",
+        "meta-llama/llama-3.3-70b-instruct",
+        "deepseek-chat",
+    ]
+
+    last_err = None
+    for m in dict.fromkeys(fallback_models):
+        try:
+            resp = await AI_CLIENT.chat.completions.create(
+                model=m,
+                messages=messages_payload,
+                max_tokens=400,
+                temperature=0.8,
+            )
+            reply_text = resp.choices[0].message.content.strip()
+            ACTIVE_AI_MODEL = m
+            history.append({"role": "assistant", "content": reply_text})
+            return reply_text
+        except Exception as err:
+            last_err = err
+            continue
+
+    return f"🥺 Ой, лапки запутались в проводах нейросети... ({last_err})"
 
 
 async def get_owner_chat_id(business_connection_id: str) -> int:
@@ -238,7 +369,12 @@ async def get_owner_chat_id(business_connection_id: str) -> int:
 
 async def send_business_reply(chat_id: int, text: str, conn_id: str, chat_name: str = ""):
     try:
-        await bot.send_message(chat_id=chat_id, text=text, business_connection_id=conn_id, parse_mode="HTML")
+        await bot.send_message(
+            chat_id=chat_id,
+            text=text,
+            business_connection_id=conn_id,
+            parse_mode="HTML",
+        )
     except TelegramBadRequest as e:
         if "BUSINESS_PEER_INVALID" in str(e):
             print(f"[!] Собеседник ({chat_name}) ещё ничего не написал в чат!")
@@ -246,29 +382,96 @@ async def send_business_reply(chat_id: int, text: str, conn_id: str, chat_name: 
             print(f"[!] Ошибка Telegram при отправке в чат: {e}")
 
 
-async def ask_ai(prompt: str) -> str:
-    """Запрос к Llama 3.3 через OpenRouter"""
+def is_secret_or_timer_media(message: types.Message) -> bool:
+    """Проверяет все возможные признаки исчезающего/защищённого медиа в Telegram"""
+    if getattr(message, "has_protected_content", None):
+        return True
+    if getattr(message, "has_media_spoiler", None):
+        return True
+    if getattr(message, "ttl_seconds", None) or getattr(message, "self_destruct_period", None):
+        return True
+    extra = getattr(message, "model_extra", None) or {}
+    for k, v in extra.items():
+        if ("ttl" in k.lower() or "destruct" in k.lower() or "once" in k.lower() or "secret" in k.lower()) and v:
+            return True
+    return False
+
+
+async def download_media_bytes(file_id: str) -> bytes | None:
+    """Скачивает медиафайл в оперативную память, чтобы обойти запрет пересылки и удаление"""
     try:
-        response = await AI_CLIENT.chat.completions.create(
-            model="meta-llama/llama-3.3-70b-instruct",
-            messages=[
-                {"role": "system", "content": "Ты милый фембойчик-ассистент из ЧВК «Мягкие Лапки». Отвечай коротко, с каомодзи (uwu, :3, 👉👈), иногда упоминая баночки белого Monster Energy."},
-                {"role": "user", "content": prompt}
-            ],
-            max_tokens=300
-        )
-        return response.choices[0].message.content
+        buf = io.BytesIO()
+        await bot.download(file_id, destination=buf)
+        return buf.getvalue()
     except Exception as e:
-        return f"🥺 Ой, нейросеть временно спит (~ {e})"
+        print(f"[!] Не удалось скачать медиа ({file_id[:15]}...): {e}")
+        return None
+
+
+async def send_cached_media_to_owner(
+    owner_chat_id: int,
+    m_type: str,
+    f_id: str | None,
+    raw_bytes: bytes | None,
+    header: str,
+    sender: str,
+):
+    """Отправляет сохранённое медиа владельцу (сначала пробует из памяти, затем по file_id)"""
+    filename_map = {
+        "photo": "secret_photo.jpg",
+        "video": "secret_video.mp4",
+        "voice": "secret_voice.ogg",
+        "video_note": "secret_circle.mp4",
+        "document": "secret_file.bin",
+    }
+    fname = filename_map.get(m_type, "secret.bin")
+
+    if raw_bytes:
+        input_file = BufferedInputFile(raw_bytes, filename=fname)
+        if m_type == "photo":
+            await bot.send_photo(owner_chat_id, input_file, caption=header, parse_mode="HTML")
+            return
+        elif m_type == "voice":
+            await bot.send_voice(owner_chat_id, input_file, caption=header, parse_mode="HTML")
+            return
+        elif m_type == "video":
+            await bot.send_video(owner_chat_id, input_file, caption=header, parse_mode="HTML")
+            return
+        elif m_type == "video_note":
+            await bot.send_message(owner_chat_id, header, parse_mode="HTML")
+            await bot.send_video_note(owner_chat_id, input_file)
+            return
+        elif m_type == "document":
+            await bot.send_document(owner_chat_id, input_file, caption=header, parse_mode="HTML")
+            return
+
+    if f_id:
+        if m_type == "photo":
+            await bot.send_photo(owner_chat_id, f_id, caption=header, parse_mode="HTML")
+        elif m_type == "voice":
+            await bot.send_voice(owner_chat_id, f_id, caption=header, parse_mode="HTML")
+        elif m_type == "video":
+            await bot.send_video(owner_chat_id, f_id, caption=header, parse_mode="HTML")
+        elif m_type == "video_note":
+            await bot.send_message(owner_chat_id, header, parse_mode="HTML")
+            await bot.send_video_note(owner_chat_id, f_id)
+        elif m_type == "document":
+            await bot.send_document(owner_chat_id, f_id, caption=header, parse_mode="HTML")
+        else:
+            await bot.send_message(owner_chat_id, header, parse_mode="HTML")
+    else:
+        await bot.send_message(owner_chat_id, header, parse_mode="HTML")
 
 
 async def setup_bot_commands():
     commands = [
         BotCommand(command="start", description="🌸 Запустить бота и краткая инфа"),
         BotCommand(command="help", description="🎀 Полная шпаргалка по всем командам"),
+        BotCommand(command="afk", description="🌙 Вкл/выкл режим «Не в сети» для ИИ"),
         BotCommand(command="rp", description="🐾 Список всех РП-команд"),
         BotCommand(command="add_rp", description="➕ Добавить свою РП-команду"),
         BotCommand(command="del_rp", description="🗑 Удалить РП-команду"),
+        BotCommand(command="clear", description="🧹 Очистить память диалога с ИИ"),
     ]
     await bot.set_my_commands(commands)
 
@@ -278,14 +481,22 @@ async def setup_bot_commands():
 
 @dp.message(CommandStart())
 async def cmd_start(message: types.Message):
+    global last_owner_activity
+    last_owner_activity = time.time()
+    status_str = "🌙 Включён принудительно (/afk)" if manual_afk else "☀️ Автоматический (через 5 мин тишины)"
     await message.answer(
         "🌸 <b>Приветик! Няшный бизнес-бот с ИИ активен и готов к работе~ (◕‿◕)♡</b>\n\n"
+        "💬 <b>Общение с ИИ:</b>\n"
+        "Пиши мне сюда <b>любое сообщение</b> без команд — я отвечу как твой личный фембой-ассистент!\n\n"
+        f"🤖 <b>Режим автоответчика в чатах:</b> {status_str}\n\n"
         "🎀 <b>Меню управления ботом:</b>\n"
-        "• /help — полный список мини-игр, браков и команд\n"
+        "• /help — полный список мини-игр, ИИ, браков и команд\n"
+        "• /afk — переключить режим «Не в сети» вручную\n"
         "• /rp — посмотреть все доступные РП-действия\n"
         "• /add_rp — создать свою собственную РП-команду\n"
-        "• /del_rp — удалить ненужную команду\n\n"
-        "<i>🐾 Сюда автоматически прилетают все удалённые, изменённые и исчезающие фото твоих собеседников!</i>",
+        "• /del_rp — удалить ненужную команду\n"
+        "• /clear — очистить память ИИ\n\n"
+        "<i>🐾 Сюда также автоматически прилетают все удалённые, изменённые и секретные медиа твоих собеседников!</i>",
         parse_mode="HTML",
     )
 
@@ -294,23 +505,51 @@ async def cmd_start(message: types.Message):
 async def cmd_help(message: types.Message):
     await message.answer(
         "🎀 <b>Полная инструкция по боту (⁄ ⁄•⁄ω⁄•⁄ ⁄):</b>\n\n"
-        "<b>1. 🎭 РП-команды (в личке с друзьями):</b>\n"
+        "<b>1. 🤖 ИИ-ассистент (3 режима):</b>\n"
+        "• <b>В личке со мной:</b> просто пиши любой текст, я отвечу на всё!\n"
+        "• <b>В чатах с друзьями по команде:</b> напиши <code>.ии [вопрос]</code> или <code>.ai [вопрос]</code>\n"
+        "• <b>Когда ты не в сети:</b> если ты не писал ничего 5 минут (или включил <code>/afk</code> / <code>.афк</code>), я сам вежливо отвечу собеседнику за тебя!\n\n"
+        "<b>2. 🎭 РП-команды (в личке с друзьями):</b>\n"
         "Пиши с точкой, со слэшем или словом: <code>.обнять</code>, <code>.монстр</code>, "
         "<code>.наручки</code>, <code>.чокер</code> (полный список: /rp).\n\n"
-        "<b>2. 🤖 ИИ-ассистент:</b>\n"
-        "Напиши <code>.ai [текст]</code> в переписке, чтобы спросить Llama 3.3~ ✨\n\n"
         "<b>3. 🎲 Мини-игры и рандомайзеры:</b>\n"
-        "• <code>.инфа [текст]</code> — вероятность события в %\n"
-        "• <code>.шип</code> — ваша совместимость с собеседником\n"
-        "• <code>.милота</code> — тест на % няшности\n"
-        "• <code>.uwu</code> (реплаем) — переведёт текст друга на няшный язык\n\n"
-        "<b>4. 💍 Отношения и секреты:</b>\n"
-        "• <b>Исчезающие фото</b> перехватываются сюда автоматически! 📸✨\n"
+        "• <code>.инфа [текст]</code> или <code>.шар [текст]</code> — вероятность события в %\n"
+        "• <code>.шип</code> или <code>.любовь</code> — ваша совместимость с собеседником\n"
+        "• <code>.милота</code> или <code>.фембойтест</code> — тест на % няшности\n"
+        "• <code>.выбор А или Б</code> — поможет выбрать между двумя вариантами\n"
+        "• <code>.uwu</code> (ответом на сообщение) — переведёт текст друга на няшный язык\n\n"
+        "<b>4. 💍 Отношения, статистика и секреты:</b>\n"
+        "• <b>Секретные и удалённые фото/кружочки/ГС</b> сохраняются сюда автоматически! 📸✨\n"
         "• <code>.брак</code> — пожениться с собеседником\n"
-        "• <code>.стата</code> — статистика чата\n"
-        "• <code>.инфо</code> — карточка собеседника",
+        "• <code>.мы</code> — сколько времени в браке\n"
+        "• <code>.развод</code> — расторгнуть брак 💔\n"
+        "• <code>.стата</code> — статистика сообщений и обнимашек\n"
+        "• <code>.инфо</code> — карточка собеседника (ID, пойманные секреты)\n\n"
+        "<b>5. ➕ Свои РП-команды без кода:</b>\n"
+        "Добавить: <code>/add_rp боньк = сделал мягкий боньк 🐾</code>\n"
+        "Удалить: <code>/del_rp боньк</code>",
         parse_mode="HTML",
     )
+
+
+@dp.message(Command("afk"))
+async def cmd_afk(message: types.Message):
+    global manual_afk, last_owner_activity
+    manual_afk = not manual_afk
+    if not manual_afk:
+        last_owner_activity = time.time()
+    state_text = (
+        "🌙 <b>Режим «Не в сети» ВКЛЮЧЁН!</b>\nТеперь я буду сам отвечать твоим собеседникам в личных чатах~ 🐾"
+        if manual_afk
+        else "☀️ <b>Режим «Не в сети» ВЫКЛЮЧЕН!</b>\nЯ буду включаться только если ты не пишешь больше 5 минут uwu~"
+    )
+    await message.answer(state_text, parse_mode="HTML")
+
+
+@dp.message(Command("clear"))
+async def cmd_clear(message: types.Message):
+    ai_history.pop(message.chat.id, None)
+    await message.answer("🧹✨ Память диалога со мной очищена! Начинаем с чистого листа uwu~")
 
 
 @dp.message(Command("rp"))
@@ -388,38 +627,97 @@ async def cmd_del_rp(message: types.Message):
         )
 
 
+@dp.message()
+async def handle_bot_dm_ai(message: types.Message):
+    """Отвечает через ИИ на любое обычное сообщение в личке с самим ботом"""
+    global last_owner_activity
+    last_owner_activity = time.time()
+
+    user_prompt = message.text or message.caption
+    if not user_prompt:
+        await message.answer("🐾 Мур? Напиши мне что-нибудь текстом, и я с радостью отвечу uwu~")
+        return
+
+    await bot.send_chat_action(chat_id=message.chat.id, action="typing")
+    reply = await ask_ai(message.chat.id, user_prompt, mode="normal")
+    await message.answer(reply)
+
+
 # ==================== РАБОТА В ЛИЧНЫХ ЧАТАХ (BUSINESS) ====================
 
 
 @dp.business_message()
 async def handle_business_message(message: types.Message):
+    global last_owner_activity, manual_afk
+
     conn_id = message.business_connection_id
     owner_chat_id = await get_owner_chat_id(conn_id)
+
+    # Если пишет сам владелец аккаунта — обновляем время его онлайна
+    if message.from_user.id == owner_chat_id:
+        last_owner_activity = time.time()
 
     partner_title = message.chat.full_name or "Милашка"
     chat_stat = get_chat_stat(message.chat.id, partner_title)
     chat_stat["messages"] += 1
     save_stats(CHAT_STATS)
 
-    # УНИВЕРСАЛЬНАЯ ЛОВУШКА ФОТО (включая секретки и таймеры)
-    if message.photo and message.via_bot is None:
-        chat_stat["secret_media_caught"] += 1
-        save_stats(CHAT_STATS)
-        
-        sender = html.escape(message.from_user.full_name)
+    # Определяем тип медиа и его file_id
+    media_type = None
+    file_id = None
+    if message.photo:
+        media_type = "photo"
         file_id = message.photo[-1].file_id
-        caption = html.escape(message.caption or "[секретное/исчезающее фото]")
-        
-        try:
-            await bot.send_photo(
-                chat_id=owner_chat_id,
-                photo=file_id,
-                caption=f"📸✨ <b>Поймано фото / секретка</b> от <b>{sender}</b>:\n\n<blockquote>{caption}</blockquote>",
-                parse_mode="HTML"
+    elif message.voice:
+        media_type = "voice"
+        file_id = message.voice.file_id
+    elif message.video_note:
+        media_type = "video_note"
+        file_id = message.video_note.file_id
+    elif message.video:
+        media_type = "video"
+        file_id = message.video.file_id
+    elif message.document:
+        media_type = "document"
+        file_id = message.document.file_id
+
+    # Скачиваем медиа от собеседника в оперативную память (для перехвата таймеров и удалёнок)
+    raw_bytes = None
+    if media_type and file_id and message.from_user.id != owner_chat_id:
+        raw_bytes = await download_media_bytes(file_id)
+
+        # Если у медиа есть признак таймера / секретки / защиты — сразу шлём владельцу
+        if is_secret_or_timer_media(message):
+            chat_stat["secret_media_caught"] += 1
+            save_stats(CHAT_STATS)
+            sender = html.escape(message.from_user.full_name)
+            caption = html.escape(message.caption or "[без подписи]")
+            header = (
+                f"📸🔥 <b>Поймана секретка / медиа с таймером</b> от <b>{sender}</b>:\n\n"
+                f"<blockquote>{caption}</blockquote>"
             )
-            print(f"[СЕКРЕТ] Перехвачено фото от {sender}")
-        except Exception as e:
-            print(f"[!] Не удалось переслать фото: {e}")
+            try:
+                await send_cached_media_to_owner(owner_chat_id, media_type, file_id, raw_bytes, header, sender)
+                print(f"[СЕКРЕТ] Мгновенно сохранено защищённое медиа ({media_type}) от {sender}")
+            except Exception as e:
+                print(f"[!] Не удалось отправить секретное медиа: {e}")
+
+    # Сохраняем сообщение в кэш (ограничиваем размер кэша до 30 последних записей для экономии ОЗУ)
+    if len(messages_cache) > 30:
+        oldest_key = next(iter(messages_cache))
+        messages_cache.pop(oldest_key, None)
+
+    messages_cache[(message.chat.id, message.message_id)] = {
+        "sender_id": message.from_user.id,
+        "sender_name": message.from_user.full_name,
+        "text": message.text or message.caption or "",
+        "media_type": media_type,
+        "file_id": file_id,
+        "raw_bytes": raw_bytes,
+    }
+    print(
+        f"[КЭШ] Запомнил сообщение от {message.from_user.full_name}: {message.text or f'[{media_type}]'}"
+    )
 
     if message.text:
         text_stripped = message.text.strip()
@@ -433,6 +731,7 @@ async def handle_business_message(message: types.Message):
         else:
             target_name = "тебя"
 
+        # Добавление/удаление РП-команд прямо из чата
         if message.from_user.id == owner_chat_id and lower_stripped.startswith((".дерп ", "/add_rp ")):
             raw = text_stripped.partition(" ")[2].strip()
             if "=" in raw:
@@ -461,42 +760,131 @@ async def handle_business_message(message: types.Message):
                 )
             return
 
+        # Обработка команд с точкой, слэшем или восклицательным знаком
         if text_stripped.startswith((".", "/", "!")):
             cmd_parts = text_stripped[1:].strip().split(maxsplit=1)
             cmd_word = cmd_parts[0].lower() if cmd_parts else ""
             cmd_arg = cmd_parts[1].strip() if len(cmd_parts) > 1 else ""
 
-            # ИИ-запрос через .ai
-            if cmd_word in ("ai", "ии", "gpt"):
-                if not cmd_arg:
-                    await send_business_reply(message.chat.id, "🥺 Напиши текст для Llama 3.3 после команды, например: <code>.ai привет</code> 👉👈", conn_id, partner_title)
+            # Переключение режима AFK прямо из чата (для владельца)
+            if cmd_word in ("афк", "afk") and message.from_user.id == owner_chat_id:
+                manual_afk = not manual_afk
+                if not manual_afk:
+                    last_owner_activity = time.time()
+                await bot.send_message(
+                    owner_chat_id,
+                    "🌙 Режим «Не в сети» ВКЛЮЧЁН!" if manual_afk else "☀️ Режим «Не в сети» ВЫКЛЮЧЕН!",
+                )
+                return
+
+            # Вызов ИИ по команде .ии / .ai / .gpt
+            if cmd_word in ("ии", "ai", "gpt", "нейро"):
+                prompt_text = cmd_arg
+                if not prompt_text and message.reply_to_message:
+                    prompt_text = message.reply_to_message.text or message.reply_to_message.caption or ""
+                if not prompt_text:
+                    await send_business_reply(
+                        message.chat.id,
+                        "🥺 Напиши вопрос после команды (например: <code>.ии расскажи сказку</code>) или ответь командой <code>.ии</code> на сообщение 👉👈",
+                        conn_id,
+                        partner_title,
+                    )
                     return
-                ai_reply = await ask_ai(cmd_arg)
+                ai_reply = await ask_ai(message.chat.id, prompt_text, mode="normal", partner_name=partner_title)
                 await send_business_reply(
                     message.chat.id,
-                    f"🤖✨ <b>Ответ Llama 3.3:</b>\n<blockquote>{html.escape(ai_reply)}</blockquote>",
+                    f"🤖🐾 <b>Ответ ИИ:</b>\n<blockquote>{html.escape(ai_reply)}</blockquote>",
                     conn_id,
-                    partner_title
+                    partner_title,
                 )
                 return
 
             if cmd_word in ("инфа", "шар", "infa", "ball"):
                 if not cmd_arg:
-                    await send_business_reply(message.chat.id, "🔮 Напиши вопрос после команды, например: <code>.инфа мы пойдём гулять</code> 👉👈", conn_id, partner_title)
+                    await send_business_reply(
+                        message.chat.id,
+                        "🔮 Напиши вопрос после команды, например: <code>.инфа мы пойдём гулять</code> 👉👈",
+                        conn_id,
+                        partner_title,
+                    )
                     return
                 pct = random.randint(0, 100)
                 verdict = "Ура-ура, почти наверняка! (◕‿◕)♡" if pct >= 50 else "Кажется, шансов маловато... 🥺👉👈"
-                await send_business_reply(message.chat.id, f"🔮 Вероятность: <b>{pct}%</b>\n╰┈➤ {verdict}", conn_id, partner_title)
+                await send_business_reply(
+                    message.chat.id,
+                    f"🔮 <b>Шар судьбы мурлычет:</b>\n"
+                    f"Вероятность того, что <i>«{html.escape(cmd_arg)}»</i> — <b>{pct}%</b>!\n"
+                    f"╰┈➤ {verdict}",
+                    conn_id,
+                    partner_title,
+                )
                 return
 
             if cmd_word in ("шип", "любовь", "ship", "love"):
                 pct = random.randint(0, 100)
-                await send_business_reply(message.chat.id, f"💘 Совместимость с <b>{html.escape(partner_title)}</b>: <b>{pct}%</b>~", conn_id, partner_title)
+                if pct >= 85:
+                    comment = "Идеальная парочка котиков! Срочно обниматься~ 🐾💞"
+                elif pct >= 50:
+                    comment = "Очень милый вайб, у вас всё получится~ (⁄ ⁄•⁄ω⁄•⁄ ⁄)"
+                elif pct >= 20:
+                    comment = "Нужно больше вкусняшек и белых Монстров для укрепления связи! 🥫🌸"
+                else:
+                    comment = "Кто-то сегодня вредничает и кусается! >_<"
+                await send_business_reply(
+                    message.chat.id,
+                    f"💘 <b>Проверка любви:</b>\n"
+                    f"Совместимость <b>{sender_name}</b> и <b>{html.escape(partner_title)}</b> сегодня — <b>{pct}%</b>!\n"
+                    f"╰┈➤ <i>{comment}</i>",
+                    conn_id,
+                    partner_title,
+                )
                 return
 
-            if cmd_word in ("милота", "фембойтест", "няшность"):
+            if cmd_word in ("милота", "фембойтест", "няшность", "cute", "femboy"):
+                tested_user = (
+                    html.escape(message.reply_to_message.from_user.full_name)
+                    if (message.reply_to_message and message.reply_to_message.from_user)
+                    else sender_name
+                )
                 pct = random.randint(0, 100)
-                await send_business_reply(message.chat.id, f"🌸 Уровень няшности <b>{sender_name}</b> — <b>{pct}%</b> uwu~", conn_id, partner_title)
+                if pct <= 20:
+                    rank = "Суровый гигачад, ни одного чулочка в шкафу 🗿"
+                elif pct <= 55:
+                    rank = "Начинающий котик, уже засматривается на розовые оверсайз-худи 👉👈"
+                elif pct <= 85:
+                    rank = "Сертифицированная милашка, кошачьи ушки сидят как влитые! 🐾🌸"
+                else:
+                    rank = "Ультра-фембойчик 1000 lvl в полосатых чулочках и с баночкой белого Монстра! 🧦🥫💖"
+                await send_business_reply(
+                    message.chat.id,
+                    f"🌸 <b>Сканер милоты завершил проверку!</b>\n"
+                    f"Уровень няшности <b>{tested_user}</b> — <b>{pct}%</b>!\n"
+                    f"╰┈➤ 🎀 <i>Вердикт: {rank}</i>",
+                    conn_id,
+                    partner_title,
+                )
+                return
+
+            if cmd_word in ("выбор", "choose", "или"):
+                if " или " not in cmd_arg.lower():
+                    await send_business_reply(
+                        message.chat.id,
+                        "🎀 Напиши два варианта через «или», например:\n<code>.выбор пойти спать или пить монстр</code>",
+                        conn_id,
+                        partner_title,
+                    )
+                    return
+                idx = cmd_arg.lower().find(" или ")
+                opt1 = cmd_arg[:idx].strip()
+                opt2 = cmd_arg[idx + 5 :].strip()
+                chosen = random.choice([opt1, opt2]) if (opt1 and opt2) else cmd_arg
+                await send_business_reply(
+                    message.chat.id,
+                    f"🐾 <b>Лапки сделали выбор:</b>\n"
+                    f"Конечно же <b>«{html.escape(chosen)}»</b>! uwu~ ✨",
+                    conn_id,
+                    partner_title,
+                )
                 return
 
             if cmd_word == "uwu":
@@ -504,30 +892,129 @@ async def handle_business_message(message: types.Message):
                 if not source_text and message.reply_to_message:
                     source_text = message.reply_to_message.text or message.reply_to_message.caption or ""
                 if not source_text:
-                    await send_business_reply(message.chat.id, "🥺 Ответь командой <code>.uwu</code> на сообщение!", conn_id, partner_title)
+                    await send_business_reply(
+                        message.chat.id,
+                        "🥺 Ответь командой <code>.uwu</code> на текстовое сообщение или напиши <code>.uwu свой текст</code>!",
+                        conn_id,
+                        partner_title,
+                    )
                     return
-                await send_business_reply(message.chat.id, f"🌸 <b>UwU:</b>\n<blockquote>{html.escape(uwuify_text(source_text))}</blockquote>", conn_id, partner_title)
+                await send_business_reply(
+                    message.chat.id,
+                    f"🌸 <b>UwU-переводчик:</b>\n<blockquote>{html.escape(uwuify_text(source_text))}</blockquote>",
+                    conn_id,
+                    partner_title,
+                )
                 return
 
             if cmd_word in ("брак", "marry"):
                 if chat_stat.get("married_since"):
                     dur = format_duration(int(time.time() - chat_stat["married_since"]))
-                    await send_business_reply(message.chat.id, f"💍 Вы уже в браке <b>{dur}</b>! (◕‿◕)♡", conn_id, partner_title)
+                    await send_business_reply(
+                        message.chat.id,
+                        f"💍 Вы с <b>{html.escape(partner_title)}</b> уже в счастливом браке целых <b>{dur}</b>! (◕‿◕)♡",
+                        conn_id,
+                        partner_title,
+                    )
                 else:
                     chat_stat["married_since"] = time.time()
                     save_stats(CHAT_STATS)
-                    await send_business_reply(message.chat.id, f"💍🌸 <b>Горько!</b> Вы теперь в няшном браке~ 🎀💞", conn_id, partner_title)
+                    await send_business_reply(
+                        message.chat.id,
+                        f"💍🌸 <b>Горько!</b>\n"
+                        f"<b>{sender_name}</b> и <b>{html.escape(partner_title)}</b> теперь официально в няшном браке! "
+                        f"Обменялись чокерами и кольцами~ 🎀💞\n"
+                        f"╰┈➤ <i>Проверить стаж: <code>.мы</code></i>",
+                        conn_id,
+                        partner_title,
+                    )
+                return
+
+            if cmd_word in ("развод", "divorce"):
+                if not chat_stat.get("married_since"):
+                    await send_business_reply(
+                        message.chat.id,
+                        "🥺 Вы и так пока не состоите в браке 👉👈 (заключить: <code>.брак</code>)",
+                        conn_id,
+                        partner_title,
+                    )
+                else:
+                    dur = format_duration(int(time.time() - chat_stat["married_since"]))
+                    chat_stat["married_since"] = None
+                    save_stats(CHAT_STATS)
+                    await send_business_reply(
+                        message.chat.id,
+                        f"💔🥺 <b>Брак расторгнут...</b>\n"
+                        f"Вы пробыли вместе <b>{dur}</b>, но котики решили пойти разными дорожками.",
+                        conn_id,
+                        partner_title,
+                    )
+                return
+
+            if cmd_word in ("мы", "we"):
+                if not chat_stat.get("married_since"):
+                    await send_business_reply(
+                        message.chat.id,
+                        f"🐾 Вы с <b>{html.escape(partner_title)}</b> пока не в браке! Чтобы пожениться, напиши <code>.брак</code> 💍",
+                        conn_id,
+                        partner_title,
+                    )
+                else:
+                    dur = format_duration(int(time.time() - chat_stat["married_since"]))
+                    await send_business_reply(
+                        message.chat.id,
+                        f"💞 <b>Ваш любовный уголок с {html.escape(partner_title)}:</b>\n\n"
+                        f"💍 <b>Вместе уже:</b> {dur}\n"
+                        f"🌸 <b>Всего РП-нежностей:</b> {chat_stat['rp_total']}\n"
+                        f"💬 <b>Сообщений в чате:</b> {chat_stat['messages']}",
+                        conn_id,
+                        partner_title,
+                    )
                 return
 
             if cmd_word in ("стата", "stats"):
+                married_str = (
+                    f"💍 В браке ({format_duration(int(time.time() - chat_stat['married_since']))})"
+                    if chat_stat.get("married_since")
+                    else "Свободны котики 🐾"
+                )
+                breakdown = chat_stat.get("rp_breakdown", {})
+                top_rp = sorted(breakdown.items(), key=lambda x: x[1], reverse=True)[:5]
+                top_lines = (
+                    "\n".join([f"  • <code>.{k}</code> — {v} раз(а)" for k, v in top_rp])
+                    if top_rp
+                    else "  Пока ни одной команды 🥺"
+                )
                 await send_business_reply(
                     message.chat.id,
-                    f"📊 <b>Статистика чата:</b>\n💬 Сообщений: {chat_stat['messages']}\n📸 Секретных фото: {chat_stat.get('secret_media_caught', 0)}",
-                    conn_id, partner_title
+                    f"📊 <b>Няшная статистика чата с {html.escape(partner_title)}:</b>\n\n"
+                    f"💬 <b>Сообщений записано:</b> {chat_stat['messages']}\n"
+                    f"🎭 <b>Всего РП-действий:</b> {chat_stat['rp_total']}\n"
+                    f"📸 <b>Секретных фото поймано:</b> {chat_stat.get('secret_media_caught', 0)}\n"
+                    f"💖 <b>Статус:</b> {married_str}\n\n"
+                    f"🏆 <b>Топ ваших действий:</b>\n{top_lines}",
+                    conn_id,
+                    partner_title,
                 )
                 return
 
-        # РП-команды
+            if cmd_word in ("инфо", "info"):
+                uname = f"@{message.chat.username}" if message.chat.username else "скрыт"
+                await send_business_reply(
+                    message.chat.id,
+                    f"🪪 <b>Карточка котика {html.escape(partner_title)}:</b>\n\n"
+                    f"🆔 <b>Telegram ID:</b> <code>{message.chat.id}</code>\n"
+                    f"🔗 <b>Юзернейм:</b> {uname}\n"
+                    f"💬 <b>Сообщений в базе:</b> {chat_stat['messages']}\n"
+                    f"✏️ <b>Изменено сообщений:</b> {chat_stat['edited_caught']}\n"
+                    f"🐾 <b>Удалено сообщений:</b> {chat_stat['deleted_caught']}\n"
+                    f"📸 <b>Секретных фоток сохранено:</b> {chat_stat.get('secret_media_caught', 0)}",
+                    conn_id,
+                    partner_title,
+                )
+                return
+
+        # Проверка РП-команд
         clean_text = text_stripped.lstrip(".!/").strip()
         clean_lower = clean_text.lower()
         first_word = clean_lower.split()[0] if clean_lower else ""
@@ -551,10 +1038,16 @@ async def handle_business_message(message: types.Message):
         if matched_cmd:
             emoji, verb, suffix = format_rp_action(RP_COMMANDS[matched_cmd])
             suffix_part = f" {html.escape(suffix)}" if suffix else ""
-            extra_comment = f"\n╰┈➤ 💭 <i>Реплика: {html.escape(extra_text)}</i> 🎀" if extra_text else ""
+            extra_comment = (
+                f"\n╰┈➤ 💭 <i>Реплика: {html.escape(extra_text)}</i> 🎀"
+                if extra_text
+                else ""
+            )
 
             chat_stat["rp_total"] += 1
-            chat_stat["rp_breakdown"][matched_cmd] = chat_stat["rp_breakdown"].get(matched_cmd, 0) + 1
+            chat_stat["rp_breakdown"][matched_cmd] = (
+                chat_stat["rp_breakdown"].get(matched_cmd, 0) + 1
+            )
             save_stats(CHAT_STATS)
 
             await send_business_reply(
@@ -563,24 +1056,35 @@ async def handle_business_message(message: types.Message):
                 conn_id,
                 partner_title,
             )
+            print(f"[RP] Отправлена команда '{matched_cmd}' в чат с {partner_title}")
             return
 
-    media_type = "photo" if message.photo else None
-    file_id = message.photo[-1].file_id if message.photo else None
-
-    messages_cache[(message.chat.id, message.message_id)] = {
-        "sender_id": message.from_user.id,
-        "sender_name": message.from_user.full_name,
-        "text": message.text or message.caption or "",
-        "media_type": media_type,
-        "file_id": file_id,
-    }
+        # АВТООТВЕТЧИК ИИ, КОГДА ВЛАДЕЛЕЦ НЕ В СЕТИ
+        if message.from_user.id != owner_chat_id and is_owner_offline():
+            now = time.time()
+            # Небольшая задержка (15 сек) между автоответами в одном чате, чтобы не спамить на быстрые реплики
+            if now - afk_last_reply_time.get(message.chat.id, 0) >= 15:
+                afk_last_reply_time[message.chat.id] = now
+                ai_reply = await ask_ai(
+                    message.chat.id,
+                    text_stripped,
+                    mode="afk",
+                    partner_name=partner_title,
+                )
+                await send_business_reply(
+                    message.chat.id,
+                    f"🌙🐾 <b>[Автоответчик ЧВК «Мягкие Лапки»]:</b>\n<blockquote>{html.escape(ai_reply)}</blockquote>",
+                    conn_id,
+                    partner_title,
+                )
+                print(f"[AFK-ИИ] Ответил за владельца в чате с {partner_title}")
 
 
 @dp.edited_business_message()
 async def handle_edited_business_message(message: types.Message):
     conn_id = message.business_connection_id
     owner_chat_id = await get_owner_chat_id(conn_id)
+
     if message.from_user.id == owner_chat_id:
         return
 
@@ -590,7 +1094,11 @@ async def handle_edited_business_message(message: types.Message):
 
     key = (message.chat.id, message.message_id)
     old_data = messages_cache.get(key)
-    old_text = html.escape(old_data["text"]) if old_data and old_data["text"] else "[не сохранено]"
+    old_text = (
+        html.escape(old_data["text"])
+        if old_data and old_data["text"]
+        else "[не сохранено в кэше]"
+    )
     new_text = html.escape(message.text or message.caption or "[без текста]")
     sender = html.escape(message.from_user.full_name)
 
@@ -600,44 +1108,59 @@ async def handle_edited_business_message(message: types.Message):
     try:
         await bot.send_message(
             chat_id=owner_chat_id,
-            text=f"🌸 <b>Изменено сообщение</b> от <b>{sender}</b>:\n\n<b>Было:</b>\n<blockquote>{old_text}</blockquote>\n<b>Стало:</b>\n<blockquote>{new_text}</blockquote>",
+            text=(
+                f"🌸 <b>Изменено сообщение</b> от <b>{sender}</b> (👀):\n\n"
+                f"🎀 <b>Было:</b>\n<blockquote>{old_text}</blockquote>\n"
+                f"✨ <b>Стало:</b>\n<blockquote>{new_text}</blockquote>"
+            ),
             parse_mode="HTML",
         )
+        print(f"[ЛОГ] Переслано изменённое сообщение от {sender}")
     except Exception as e:
-        print(f"[!] Ошибка лога правок: {e}")
+        print(f"[!] Не удалось отправить лог в личку бота: {e}")
 
 
 @dp.deleted_business_messages()
 async def handle_deleted_business_messages(event: types.BusinessMessagesDeleted):
     conn_id = event.business_connection_id
     owner_chat_id = await get_owner_chat_id(conn_id)
+
     chat_stat = get_chat_stat(event.chat.id, event.chat.full_name or "Собеседник")
 
     for msg_id in event.message_ids:
         key = (event.chat.id, msg_id)
         data = messages_cache.pop(key, None)
+
         if not data or data["sender_id"] == owner_chat_id:
             continue
 
         chat_stat["deleted_caught"] += 1
+        if data["media_type"] in ("photo", "video", "video_note", "voice"):
+            chat_stat["secret_media_caught"] = chat_stat.get("secret_media_caught", 0) + 1
         save_stats(CHAT_STATS)
 
         sender = html.escape(data["sender_name"])
         saved_text = html.escape(data["text"]) if data["text"] else "[без текста]"
-        header = f"🐾 <b>Удалено сообщение</b> от <b>{sender}</b>:\n\n<blockquote>{saved_text}</blockquote>"
+        header = f"🐾 <b>Удалено / исчезло сообщение</b> от <b>{sender}</b> (не спрячешься~ :3):\n\n<blockquote>{saved_text}</blockquote>"
 
         try:
-            if data["media_type"] == "photo" and data["file_id"]:
-                await bot.send_photo(owner_chat_id, data["file_id"], caption=header, parse_mode="HTML")
-            else:
-                await bot.send_message(owner_chat_id, header, parse_mode="HTML")
+            await send_cached_media_to_owner(
+                owner_chat_id=owner_chat_id,
+                m_type=data["media_type"],
+                f_id=data["file_id"],
+                raw_bytes=data.get("raw_bytes"),
+                header=header,
+                sender=sender,
+            )
+            print(f"[ЛОГ] Переслано удалённое/исчезнувшее сообщение от {sender}")
         except Exception as e:
-            print(f"[!] Ошибка лога удаления: {e}")
+            print(f"[!] Не удалось отправить удалённое сообщение: {e}")
 
 
 async def main():
     await setup_bot_commands()
-    print("🌸 Бот успешно запущен со всеми фишками, ИИ и перехватом фоток!")
+    model = await resolve_ai_model()
+    print(f"🌸 Бот успешно запущен! ИИ-модель: {model} | Защита секреток и AFK-режим активны!")
     await dp.start_polling(bot)
 
 
