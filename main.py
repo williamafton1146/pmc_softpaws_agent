@@ -5,16 +5,14 @@ import json
 import os
 import random
 import time
+from aiogram import Bot, Dispatcher, types
+from aiogram.filters import Command, CommandStart
+from aiogram.exceptions import TelegramBadRequest
+from aiogram.types import BotCommand, BufferedInputFile
 from openai import AsyncOpenAI
-from telethon import TelegramClient, events
-from telethon.tl.types import UserStatusOnline
 
-# ==================== НАСТРОЙКИ ====================
-# Данные от my.telegram.org (ОБЯЗАТЕЛЬНО ЗАПОЛНИ СВОИ)
-TG_API_ID = 2040
-TG_API_HASH = "b18441a1ff607e10a989891a5462e627"
+BOT_TOKEN = "8826988522:AAGz9EZjjhcEhjjlOCSKEBjb6cPRc6QRw2U"
 
-# Настройка ИИ (provod.ai)
 AI_CLIENT = AsyncOpenAI(
     api_key="sk_f3690e852e2088bacc4bee7017e56bbd74beafccc2ae2672",
     base_url="https://api.provod.ai/v1",
@@ -22,11 +20,16 @@ AI_CLIENT = AsyncOpenAI(
 ACTIVE_AI_MODEL = None
 AVAILABLE_AI_MODELS = []
 
-client = TelegramClient("softpaws_pure_telethon", TG_API_ID, TG_API_HASH)
-OWNER_ID = None
+bot = Bot(token=BOT_TOKEN)
+dp = Dispatcher()
 
-messages_cache = {}  # msg_id -> dict
+messages_cache = {}
+connections_cache = {}
 ai_history = {}
+
+# Настройки режима «Не в сети» (AFK)
+AFK_TIMEOUT = 600  # 10 минут (600 секунд) без твоих сообщений = режим «не в сети»
+last_owner_activity = time.time()
 manual_afk = False
 afk_last_reply_time = {}
 
@@ -161,8 +164,8 @@ def load_rp_commands() -> dict:
                 for k, v in saved.items():
                     if k not in RP_ACTIONS:
                         data[k] = v
-        except Exception:
-            pass
+        except Exception as err:
+            print(f"[!] Ошибка чтения {RP_FILE}: {err}")
     save_rp_commands(data)
     return data
 
@@ -172,8 +175,8 @@ def load_stats() -> dict:
         try:
             with open(STATS_FILE, "r", encoding="utf-8") as f:
                 return json.load(f)
-        except Exception:
-            pass
+        except Exception as err:
+            print(f"[!] Ошибка чтения {STATS_FILE}: {err}")
     return {}
 
 
@@ -239,23 +242,28 @@ def format_duration(seconds: int) -> str:
     return " ".join(parts)
 
 
-async def is_owner_offline_real() -> bool:
+def is_owner_offline() -> bool:
     if manual_afk:
         return True
-    try:
-        me = await client.get_entity("me")
-        return not isinstance(me.status, UserStatusOnline)
-    except Exception:
-        return False
+    return (time.time() - last_owner_activity) >= AFK_TIMEOUT
 
 
 async def resolve_ai_model() -> str:
     global ACTIVE_AI_MODEL, AVAILABLE_AI_MODELS
     if ACTIVE_AI_MODEL:
         return ACTIVE_AI_MODEL
+
     preferred = [
-        "deepseek-v4-flash", "gemini-3.1-flash-lite", "qwen3-max-preview",
-        "qwen3.7-max", "glm-5.3-flash", "claude-fable-5.1",
+        "deepseek-v4-flash",
+        "gemini-3.1-flash-lite",
+        "qwen3-max-preview",
+        "qwen3.7-max",
+        "glm-5.3-flash",
+        "glm-5.3",
+        "glm-5.2",
+        "claude-fable-5.1",
+        "claude-fable-5",
+        "deepseek-v4-flash-0731",
     ]
     try:
         models_page = await AI_CLIENT.models.list()
@@ -267,8 +275,9 @@ async def resolve_ai_model() -> str:
         if AVAILABLE_AI_MODELS:
             ACTIVE_AI_MODEL = AVAILABLE_AI_MODELS[0]
             return ACTIVE_AI_MODEL
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[!] Не удалось получить список моделей: {e}")
+
     ACTIVE_AI_MODEL = "deepseek-v4-flash"
     return ACTIVE_AI_MODEL
 
@@ -279,14 +288,17 @@ async def ask_ai(chat_id: int, user_text: str, mode: str = "normal", partner_nam
 
     if mode == "afk":
         system_prompt = (
-            f"Ты милый фембойчик-ассистент из ЧВК «Мягкие Лапки». "
-            f"Хозяин аккаунта сейчас не в сети, поэтому ты отвечаешь его собеседнику по имени {partner_name}. "
-            f"Отвечай коротко, с каомодзи (uwu, :3, 👉👈) и в мужском роде."
+            f"Ты милый, ласковый фембойчик-ассистент из ЧВК «Мягкие Лапки». "
+            f"Владелец аккаунта сейчас не в сети (отдыхает или занят), поэтому ты временно отвечаешь его собеседнику по имени {partner_name}. "
+            f"Отвечай дружелюбно, коротко, в няшном стиле с каомодзи (uwu, :3, 👉👈, (◕‿◕)♡), "
+            f"иногда упоминай пушистые чулочки, обнимашки или баночку белого Monster Energy. "
+            f"Используй только мужской род по отношению к себе (например: «я увидел», «я передал», «я решил»)."
         )
     else:
         system_prompt = (
-            "Ты милый, умный фембойчик-ассистент из ЧВК «Мягкие Лапки». "
-            "Отвечай полезно, с каомодзи (uwu, :3, 👉👈) и в мужском роде."
+            "Ты милый, умный и ласковый фембойчик-ассистент из ЧВК «Мягкие Лапки». "
+            "Отвечай полезно, понятно и с душой, добавляя милые каомодзи (uwu, :3, 👉👈, (⁄ ⁄•⁄ω⁄•⁄ ⁄)). "
+            "Используй только мужской род по отношению к себе (например: «я подумал», «я нашёл», «я сделал»)."
         )
 
     history = ai_history.setdefault(chat_id, [])
@@ -295,7 +307,9 @@ async def ask_ai(chat_id: int, user_text: str, mode: str = "normal", partner_nam
         history[:] = history[-8:]
 
     messages_payload = [{"role": "system", "content": system_prompt}] + history
-    candidates = [model_name] + AVAILABLE_AI_MODELS + ["deepseek-v4-flash", "gemini-3.1-flash-lite"]
+    candidates = [model_name] + AVAILABLE_AI_MODELS + [
+        "deepseek-v4-flash", "gemini-3.1-flash-lite", "qwen3-max-preview", "glm-5.3-flash", "claude-fable-5.1"
+    ]
 
     last_err = None
     for m in dict.fromkeys(candidates):
@@ -317,303 +331,594 @@ async def ask_ai(chat_id: int, user_text: str, mode: str = "normal", partner_nam
     return f"🥺 Ой, лапки запутались в проводах нейросети... ({last_err})"
 
 
-async def send_or_edit(event: events.NewMessage.Event, text: str):
-    """Если команду написал владелец — редактирует сообщение, если собеседник — отвечает"""
-    if event.out:
-        await event.edit(text, parse_mode="html")
+async def get_owner_chat_id(business_connection_id: str) -> int:
+    if business_connection_id not in connections_cache:
+        conn = await bot.get_business_connection(business_connection_id)
+        connections_cache[business_connection_id] = conn.user_chat_id
+    return connections_cache[business_connection_id]
+
+
+async def send_business_reply(chat_id: int, text: str, conn_id: str, chat_name: str = ""):
+    try:
+        await bot.send_message(
+            chat_id=chat_id, text=text, business_connection_id=conn_id, parse_mode="HTML"
+        )
+    except TelegramBadRequest as e:
+        print(f"[!] Ошибка Telegram при отправке в чат ({chat_name}): {e}")
+
+
+def is_secret_or_timer_media(message: types.Message) -> bool:
+    if getattr(message, "has_protected_content", None) or getattr(message, "has_media_spoiler", None):
+        return True
+    if getattr(message, "ttl_seconds", None) or getattr(message, "self_destruct_period", None):
+        return True
+    extra = getattr(message, "model_extra", None) or {}
+    for k, v in extra.items():
+        if ("ttl" in k.lower() or "destruct" in k.lower() or "once" in k.lower() or "secret" in k.lower()) and v:
+            return True
+    return False
+
+
+async def download_media_bytes(file_id: str) -> bytes | None:
+    try:
+        buf = io.BytesIO()
+        await bot.download(file_id, destination=buf)
+        return buf.getvalue()
+    except Exception as e:
+        print(f"[!] Не удалось скачать медиа: {e}")
+        return None
+
+
+async def send_cached_media_to_owner(
+    owner_chat_id: int, m_type: str, f_id: str | None, raw_bytes: bytes | None, header: str
+):
+    filename_map = {
+        "photo": "secret_photo.jpg",
+        "video": "secret_video.mp4",
+        "voice": "secret_voice.ogg",
+        "video_note": "secret_circle.mp4",
+        "document": "secret_file.bin",
+    }
+    fname = filename_map.get(m_type, "secret.bin")
+
+    if raw_bytes:
+        input_file = BufferedInputFile(raw_bytes, filename=fname)
+        if m_type == "photo":
+            await bot.send_photo(owner_chat_id, input_file, caption=header, parse_mode="HTML")
+            return
+        elif m_type == "voice":
+            await bot.send_voice(owner_chat_id, input_file, caption=header, parse_mode="HTML")
+            return
+        elif m_type == "video":
+            await bot.send_video(owner_chat_id, input_file, caption=header, parse_mode="HTML")
+            return
+        elif m_type == "video_note":
+            await bot.send_message(owner_chat_id, header, parse_mode="HTML")
+            await bot.send_video_note(owner_chat_id, input_file)
+            return
+        elif m_type == "document":
+            await bot.send_document(owner_chat_id, input_file, caption=header, parse_mode="HTML")
+            return
+
+    if f_id:
+        if m_type == "photo":
+            await bot.send_photo(owner_chat_id, f_id, caption=header, parse_mode="HTML")
+        elif m_type == "voice":
+            await bot.send_voice(owner_chat_id, f_id, caption=header, parse_mode="HTML")
+        elif m_type == "video":
+            await bot.send_video(owner_chat_id, f_id, caption=header, parse_mode="HTML")
+        elif m_type == "video_note":
+            await bot.send_message(owner_chat_id, header, parse_mode="HTML")
+            await bot.send_video_note(owner_chat_id, f_id)
+        elif m_type == "document":
+            await bot.send_document(owner_chat_id, f_id, caption=header, parse_mode="HTML")
+        else:
+            await bot.send_message(owner_chat_id, header, parse_mode="HTML")
     else:
-        await event.reply(text, parse_mode="html")
+        await bot.send_message(owner_chat_id, header, parse_mode="HTML")
 
 
-# ==================== ОСНОВНОЙ ОБРАБОТЧИК СООБЩЕНИЙ TELETHON ====================
+async def setup_bot_commands():
+    commands = [
+        BotCommand(command="start", description="🌸 Запустить бота и краткая инфа"),
+        BotCommand(command="help", description="🎀 Полная шпаргалка по всем командам"),
+        BotCommand(command="afk", description="🌙 Вкл/выкл режим «Не в сети» для ИИ"),
+        BotCommand(command="rp", description="🐾 Список всех РП-команд"),
+        BotCommand(command="add_rp", description="➕ Добавить свою РП-команду"),
+        BotCommand(command="del_rp", description="🗑 Удалить РП-команду"),
+        BotCommand(command="clear", description="🧹 Очистить память диалога с ИИ"),
+    ]
+    await bot.set_my_commands(commands)
 
-@client.on(events.NewMessage(func=lambda e: e.is_private))
-async def handle_private_message(event: events.NewMessage.Event):
-    global manual_afk
-    msg = event.message
-    chat = await event.get_chat()
-    sender = await event.get_sender()
 
-    partner_title = f"{getattr(chat, 'first_name', '')} {getattr(chat, 'last_name', '')}".strip() or "Милашка"
-    sender_name = html.escape(
-        f"{getattr(sender, 'first_name', '')} {getattr(sender, 'last_name', '')}".strip() or "Котик"
+@dp.message(CommandStart())
+async def cmd_start(message: types.Message):
+    global last_owner_activity
+    last_owner_activity = time.time()
+    status_str = "🌙 Включён принудительно (/afk)" if manual_afk else "☀️ Автоматический (через 5 мин тишины)"
+    await message.answer(
+        "🌸 <b>Приветик! Няшный бизнес-бот с ИИ активен и готов к работе~ (◕‿◕)♡</b>\n\n"
+        "💬 <b>Общение с ИИ:</b>\n"
+        "Пиши мне сюда <b>любое сообщение</b> без команд — я отвечу как твой личный фембой-ассистент!\n\n"
+        f"🤖 <b>Режим автоответчика в чатах:</b> {status_str}\n\n"
+        "🎀 <b>Меню управления ботом:</b>\n"
+        "• /help — полный список мини-игр, ИИ, браков и команд\n"
+        "• /afk — переключить режим «Не в сети» вручную\n"
+        "• /rp — посмотреть все доступные РП-действия\n"
+        "• /add_rp — создать свою собственную РП-команду\n"
+        "• /del_rp — удалить ненужную команду\n"
+        "• /clear — очистить память ИИ\n\n"
+        "<i>🐾 Сюда также автоматически прилетают все удалённые, изменённые и секретные медиа твоих собеседников!</i>",
+        parse_mode="HTML",
     )
 
-    # Если пишем сами себе в «Избранное» — там работает прямой чат с ИИ и команды управления
-    if event.chat_id == OWNER_ID:
-        txt = (msg.message or "").strip()
-        if txt == ".афк" or txt == "/afk":
-            manual_afk = not manual_afk
-            await event.reply(
-                "🌙 Режим «Не в сети» ВКЛЮЧЁН!" if manual_afk else "☀️ Режим ВЫКЛЮЧЕН (смотрю по реальному онлайну)!"
-            )
-            return
-        if txt == ".рп" or txt == "/rp":
-            lines = [f"{format_rp_action(v)[0]} .{k} — {format_rp_action(v)[1]}~" for k, v in RP_COMMANDS.items()]
-            await event.reply("🎀 Доступные РП-команды:\n\n" + "\n".join(lines))
-            return
-        if txt.startswith((".ai ", ".ии ")):
-            reply = await ask_ai(OWNER_ID, txt[4:].strip(), mode="normal")
-            await event.reply(f"🤖🐾 <b>ИИ:</b>\n<blockquote>{html.escape(reply)}</blockquote>", parse_mode="html")
+
+@dp.message(Command("help"))
+async def cmd_help(message: types.Message):
+    await message.answer(
+        "🎀 <b>Полная инструкция по боту (⁄ ⁄•⁄ω⁄•⁄ ⁄):</b>\n\n"
+        "<b>1. 🤖 ИИ-ассистент (3 режима):</b>\n"
+        "• <b>В личке со мной:</b> просто пиши любой текст, я отвечу на всё!\n"
+        "• <b>В чатах с друзьями по команде:</b> напиши <code>.ии [вопрос]</code> или <code>.ai [вопрос]</code>\n"
+        "• <b>Когда ты не в сети:</b> если ты не писал ничего 5 минут (или включил <code>/afk</code> / <code>.афк</code>), я сам вежливо отвечу собеседнику за тебя!\n\n"
+        "<b>2. 🎭 РП-команды (в личке с друзьями):</b>\n"
+        "Пиши с точкой, со слэшем или словом: <code>.обнять</code>, <code>.монстр</code>, "
+        "<code>.наручки</code>, <code>.чокер</code> (полный список: /rp).\n\n"
+        "<b>3. 🎲 Мини-игры и рандомайзеры:</b>\n"
+        "• <code>.инфа [текст]</code> или <code>.шар [текст]</code> — вероятность события в %\n"
+        "• <code>.шип</code> или <code>.любовь</code> — ваша совместимость с собеседником\n"
+        "• <code>.милота</code> или <code>.фембойтест</code> — тест на % няшности\n"
+        "• <code>.выбор А или Б</code> — поможет выбрать между двумя вариантами\n"
+        "• <code>.uwu</code> (ответом на сообщение) — переведёт текст друга на няшный язык\n\n"
+        "<b>4. 💍 Отношения, статистика и секреты:</b>\n"
+        "• <b>Секретные и удалённые фото/кружочки/ГС</b> сохраняются сюда автоматически! 📸✨\n"
+        "• <code>.брак</code> — пожениться с собеседником\n"
+        "• <code>.мы</code> — сколько времени в браке\n"
+        "• <code>.развод</code> — расторгнуть брак 💔\n"
+        "• <code>.стата</code> — статистика сообщений и обнимашек\n"
+        "• <code>.инфо</code> — карточка собеседника (ID, пойманные секреты)\n\n"
+        "<b>5. ➕ Свои РП-команды без кода:</b>\n"
+        "Добавить: <code>/add_rp боньк = сделал мягкий боньк 🐾</code>\n"
+        "Удалить: <code>/del_rp боньк</code>",
+        parse_mode="HTML",
+    )
+
+
+@dp.message(Command("afk"))
+async def cmd_afk(message: types.Message):
+    global manual_afk, last_owner_activity
+    manual_afk = not manual_afk
+    if not manual_afk:
+        last_owner_activity = time.time()
+    state_text = (
+        "🌙 <b>Режим «Не в сети» ВКЛЮЧЁН!</b>\nТеперь я буду сам отвечать твоим собеседникам в личных чатах~ 🐾"
+        if manual_afk
+        else "☀️ <b>Режим «Не в сети» ВЫКЛЮЧЕН!</b>\nЯ буду включаться только если ты не пишешь больше 10 минут uwu~"
+    )
+    await message.answer(state_text, parse_mode="HTML")
+
+
+@dp.message(Command("clear"))
+async def cmd_clear(message: types.Message):
+    ai_history.pop(message.chat.id, None)
+    await message.answer("🧹✨ Память диалога со мной очищена! Начинаем с чистого листа uwu~")
+
+
+@dp.message(Command("rp"))
+async def cmd_rp_list(message: types.Message):
+    if not RP_COMMANDS:
+        await message.answer("Список РП-команд пока пуст 🥺 Добавь первую через /add_rp!")
+        return
+    lines = [f"{format_rp_action(v)[0]} .{k} — {html.escape(str(format_rp_action(v)[1]))}~" for k, v in RP_COMMANDS.items()]
+    text = (
+        "🎀 Доступные РП-команды (⁄ ⁄>⁄ ▽ ⁄<⁄ ⁄):\n\n"
+        + "\n".join(lines)
+        + "\n\n➕ Добавить свою команду:\n/add_rp слово = действие ✨"
+    )
+    await message.answer(text)
+
+
+@dp.message(Command("add_rp"))
+async def cmd_add_rp(message: types.Message):
+    raw = message.text.partition(" ")[2].strip()
+    if "=" not in raw:
+        await message.answer(
+            "🎀 <b>Чтобы добавить команду, напиши её через знак <code>=</code>:</b>\n\n"
+            "Пример:\n<code>/add_rp боньк = сделал мягкий боньк по головке 🐾</code>",
+            parse_mode="HTML",
+        )
+        return
+    cmd_name, action_text = raw.split("=", maxsplit=1)
+    cmd_name = cmd_name.strip().lower().lstrip(".!/")
+    action_text = action_text.strip()
+    if not cmd_name or not action_text:
+        await message.answer("🥺 Укажи и название команды, и текст действия 👉👈")
+        return
+    RP_COMMANDS[cmd_name] = [["🎀", action_text, "(⁄ ⁄•⁄ω⁄•⁄ ⁄)"]]
+    save_rp_commands(RP_COMMANDS)
+    await message.answer(
+        f"🌸 <b>Ура! Новая РП-команда сохранена~ (◕‿◕)♡</b>\n\n"
+        f"Теперь в чатах можно писать <code>.{html.escape(cmd_name)}</code>:\n"
+        f"🎀 <b>Ты</b> {html.escape(action_text)} <b>Собеседника</b> (⁄ ⁄•⁄ω⁄•⁄ ⁄)~",
+        parse_mode="HTML",
+    )
+
+
+@dp.message(Command("del_rp"))
+async def cmd_del_rp(message: types.Message):
+    cmd_name = message.text.partition(" ")[2].strip().lower().lstrip(".!/")
+    if not cmd_name:
+        await message.answer("🎀 Укажи название команды: <code>/del_rp кусь</code>", parse_mode="HTML")
+        return
+    if cmd_name in RP_COMMANDS:
+        del RP_COMMANDS[cmd_name]
+        save_rp_commands(RP_COMMANDS)
+        await message.answer(f"🗑 Команда <code>.{html.escape(cmd_name)}</code> удалена из списка~ 🌸", parse_mode="HTML")
+    else:
+        await message.answer(f"🥺 Команды <code>{html.escape(cmd_name)}</code> нет в списке 👉👈", parse_mode="HTML")
+
+
+@dp.message()
+async def handle_bot_dm_ai(message: types.Message):
+    global last_owner_activity
+    last_owner_activity = time.time()
+
+    user_prompt = (message.text or message.caption or "").strip()
+    if not user_prompt:
+        await message.answer("🐾 Мур? Напиши мне что-нибудь текстом, и я с радостью отвечу uwu~")
         return
 
-    chat_stat = get_chat_stat(event.chat_id, partner_title)
+    for prefix in (".ai ", ".ии ", "/ai ", "/ии ", "!ai ", "!ии "):
+        if user_prompt.lower().startswith(prefix):
+            user_prompt = user_prompt[len(prefix):].strip()
+            break
+
+    await bot.send_chat_action(chat_id=message.chat.id, action="typing")
+    reply = await ask_ai(message.chat.id, user_prompt, mode="normal")
+    await message.answer(reply)
+
+
+@dp.business_message()
+async def handle_business_message(message: types.Message):
+    global last_owner_activity, manual_afk
+
+    conn_id = message.business_connection_id
+    owner_chat_id = await get_owner_chat_id(conn_id)
+
+    if message.from_user.id == owner_chat_id:
+        last_owner_activity = time.time()
+
+    partner_title = message.chat.full_name or "Милашка"
+    chat_stat = get_chat_stat(message.chat.id, partner_title)
     chat_stat["messages"] += 1
     save_stats(CHAT_STATS)
 
-    # 1. ПЕРЕХВАТ МЕДИА И ТАЙМЕРОВ ОТ СОБЕСЕДНИКА
-    if not event.out:
-        raw_bytes = None
-        ext = ".bin"
-        if msg.media:
-            if msg.photo:
-                ext = ".jpg"
-            elif msg.voice:
-                ext = ".ogg"
-            elif msg.video or msg.video_note:
-                ext = ".mp4"
-            buf = io.BytesIO()
-            await client.download_media(msg, file=buf)
-            raw_bytes = buf.getvalue()
+    media_type = None
+    file_id = None
+    if message.photo:
+        media_type, file_id = "photo", message.photo[-1].file_id
+    elif message.voice:
+        media_type, file_id = "voice", message.voice.file_id
+    elif message.video_note:
+        media_type, file_id = "video_note", message.video_note.file_id
+    elif message.video:
+        media_type, file_id = "video", message.video.file_id
+    elif message.document:
+        media_type, file_id = "document", message.document.file_id
 
-            ttl = getattr(msg.media, "ttl_seconds", None)
-            if ttl:
+    # Сохраняем в кэш и скачиваем медиа ТОЛЬКО от собеседника (свои фото не кэшируем)
+    if message.from_user.id != owner_chat_id:
+        raw_bytes = None
+        if media_type and file_id:
+            raw_bytes = await download_media_bytes(file_id)
+            if is_secret_or_timer_media(message):
                 chat_stat["secret_media_caught"] += 1
                 save_stats(CHAT_STATS)
-                file_obj = io.BytesIO(raw_bytes)
-                file_obj.name = f"timer_secret{ext}"
-                caption = html.escape(msg.message or "[без подписи]")
-                await client.send_file(
-                    "me",
-                    file=file_obj,
-                    caption=(
-                        f"📸🔥 <b>Поймано медиа с таймером ({ttl} сек)</b> от <b>{sender_name}</b>:\n\n"
-                        f"<blockquote>{caption}</blockquote>"
-                    ),
-                    parse_mode="html",
-                )
-                print(f"[СЕКРЕТ] Сохранено медиа с таймером от {sender_name} в Избранное!")
+                sender = html.escape(message.from_user.full_name)
+                caption = html.escape(message.caption or "[без подписи]")
+                header = f"📸🔥 <b>Поймана секретка / медиа с таймером</b> от <b>{sender}</b>:\n\n<blockquote>{caption}</blockquote>"
+                try:
+                    await send_cached_media_to_owner(owner_chat_id, media_type, file_id, raw_bytes, header)
+                except Exception as e:
+                    print(f"[!] Не удалось отправить секретное медиа: {e}")
 
-        if len(messages_cache) > 40:
+        if len(messages_cache) > 30:
             messages_cache.pop(next(iter(messages_cache)), None)
-        messages_cache[msg.id] = {
-            "chat_id": event.chat_id,
-            "sender_name": sender_name,
-            "text": msg.message or "",
+
+        messages_cache[(message.chat.id, message.message_id)] = {
+            "sender_id": message.from_user.id,
+            "sender_name": message.from_user.full_name,
+            "text": message.text or message.caption or "",
+            "media_type": media_type,
+            "file_id": file_id,
             "raw_bytes": raw_bytes,
-            "ext": ext,
         }
 
-    if not msg.message:
+    if not message.text:
         return
 
-    text_stripped = msg.message.strip()
+    text_stripped = message.text.strip()
     lower_stripped = text_stripped.lower()
-    target_name = html.escape(partner_title) if event.out else "тебя"
 
-    # Добавление/удаление своих РП-команд
-    if event.out and lower_stripped.startswith((".дерп ", "/add_rp ")):
+    sender_name = html.escape(message.from_user.full_name)
+    if message.reply_to_message and message.reply_to_message.from_user:
+        target_name = html.escape(message.reply_to_message.from_user.full_name)
+    elif message.from_user.id == owner_chat_id:
+        target_name = html.escape(partner_title)
+    else:
+        target_name = "тебя"
+
+    if message.from_user.id == owner_chat_id and lower_stripped.startswith((".дерп ", "/add_rp ")):
         raw = text_stripped.partition(" ")[2].strip()
         if "=" in raw:
             cmd_name, action_text = [x.strip() for x in raw.split("=", 1)]
             cmd_name = cmd_name.lower().lstrip(".!/")
-            RP_COMMANDS[cmd_name] = [["🎀", action_text, "(⁄ ⁄•⁄ω⁄•⁄ ⁄)"]]
-            save_rp_commands(RP_COMMANDS)
-            await event.edit(f"🌸 Команда <code>.{html.escape(cmd_name)}</code> добавлена~!", parse_mode="html")
+            if cmd_name and action_text:
+                RP_COMMANDS[cmd_name] = [["🎀", action_text, "(⁄ ⁄•⁄ω⁄•⁄ ⁄)"]]
+                save_rp_commands(RP_COMMANDS)
+                await bot.send_message(owner_chat_id, f"🌸 Команда <code>.{html.escape(cmd_name)}</code> добавлена~!", parse_mode="HTML")
         return
 
-    if event.out and lower_stripped.startswith((".удрп ", "/del_rp ")):
+    if message.from_user.id == owner_chat_id and lower_stripped.startswith((".удрп ", "/del_rp ")):
         cmd_name = text_stripped.partition(" ")[2].strip().lower().lstrip(".!/")
         if cmd_name in RP_COMMANDS:
             del RP_COMMANDS[cmd_name]
             save_rp_commands(RP_COMMANDS)
-            await event.edit(f"🗑 Команда <code>.{html.escape(cmd_name)}</code> удалена~!", parse_mode="html")
+            await bot.send_message(owner_chat_id, f"🗑 Команда <code>.{html.escape(cmd_name)}</code> удалена~!", parse_mode="HTML")
         return
 
-    # 2. МИНИ-ИГРЫ, СТАТИСТИКА И ВЫЗОВ ИИ
     if text_stripped.startswith((".", "/", "!")):
         cmd_parts = text_stripped[1:].strip().split(maxsplit=1)
         cmd_word = cmd_parts[0].lower() if cmd_parts else ""
         cmd_arg = cmd_parts[1].strip() if len(cmd_parts) > 1 else ""
 
-        if cmd_word in ("афк", "afk") and event.out:
+        if cmd_word in ("афк", "afk") and message.from_user.id == owner_chat_id:
             manual_afk = not manual_afk
-            await event.edit(
+            if not manual_afk:
+                last_owner_activity = time.time()
+            await bot.send_message(
+                owner_chat_id,
                 "🌙 Режим «Не в сети» ВКЛЮЧЁН!" if manual_afk else "☀️ Режим «Не в сети» ВЫКЛЮЧЕН!",
-                parse_mode="html",
             )
             return
 
-        if cmd_word in ("ии", "ai", "gpt", "нейро") and cmd_arg:
-            ai_reply = await ask_ai(event.chat_id, cmd_arg, mode="normal", partner_name=partner_title)
-            await send_or_edit(
-                event, f"🤖🐾 <b>Ответ ИИ:</b>\n<blockquote>{html.escape(ai_reply)}</blockquote>"
-            )
+        if cmd_word in ("ии", "ai", "gpt", "нейро"):
+            prompt_text = cmd_arg or ((message.reply_to_message.text or message.reply_to_message.caption or "") if message.reply_to_message else "")
+            if not prompt_text:
+                await send_business_reply(message.chat.id, "🥺 Напиши вопрос после команды <code>.ии</code> 👉👈", conn_id, partner_title)
+                return
+            ai_reply = await ask_ai(message.chat.id, prompt_text, mode="normal", partner_name=partner_title)
+            await send_business_reply(message.chat.id, f"🤖🐾 <b>Ответ ИИ:</b>\n<blockquote>{html.escape(ai_reply)}</blockquote>", conn_id, partner_title)
             return
 
-        if cmd_word in ("инфа", "шар", "infa", "ball") and cmd_arg:
+        if cmd_word in ("инфа", "шар", "infa", "ball"):
+            if not cmd_arg:
+                await send_business_reply(message.chat.id, "🔮 Напиши вопрос после команды, например: <code>.инфа мы пойдём гулять</code> 👉👈", conn_id, partner_title)
+                return
             pct = random.randint(0, 100)
             verdict = "Ура-ура, почти наверняка! (◕‿◕)♡" if pct >= 50 else "Кажется, шансов маловато... 🥺👉👈"
-            await send_or_edit(
-                event,
+            await send_business_reply(
+                message.chat.id,
                 f"🔮 <b>Шар судьбы мурлычет:</b>\nВероятность того, что <i>«{html.escape(cmd_arg)}»</i> — <b>{pct}%</b>!\n╰┈➤ {verdict}",
+                conn_id, partner_title,
             )
             return
 
         if cmd_word in ("шип", "любовь", "ship", "love"):
             pct = random.randint(0, 100)
-            await send_or_edit(
-                event,
-                f"💘 <b>Проверка любви:</b>\nСовместимость с <b>{html.escape(partner_title)}</b> сегодня — <b>{pct}%</b>! 🐾💞",
+            comment = (
+                "Идеальная парочка котиков! Срочно обниматься~ 🐾💞" if pct >= 85 else
+                "Очень милый вайб, у вас всё получится~ (⁄ ⁄•⁄ω⁄•⁄ ⁄)" if pct >= 50 else
+                "Нужно больше вкусняшек и белых Монстров для укрепления связи! 🥫🌸" if pct >= 20 else
+                "Кто-то сегодня вредничает и кусается! >_<"
+            )
+            await send_business_reply(
+                message.chat.id,
+                f"💘 <b>Проверка любви:</b>\nСовместимость <b>{sender_name}</b> и <b>{html.escape(partner_title)}</b> сегодня — <b>{pct}%</b>!\n╰┈➤ <i>{comment}</i>",
+                conn_id, partner_title,
             )
             return
 
         if cmd_word in ("милота", "фембойтест", "няшность", "cute", "femboy"):
+            tested_user = html.escape(message.reply_to_message.from_user.full_name) if (message.reply_to_message and message.reply_to_message.from_user) else sender_name
             pct = random.randint(0, 100)
-            await send_or_edit(
-                event,
-                f"🌸 <b>Сканер милоты:</b>\nУровень няшности <b>{sender_name}</b> — <b>{pct}%</b>! 🧦🥫💖",
+            rank = (
+                "Суровый гигачад, ни одного чулочка в шкафу 🗿" if pct <= 20 else
+                "Начинающий котик, уже засматривается на розовые оверсайз-худи 👉👈" if pct <= 55 else
+                "Сертифицированная милашка, кошачьи ушки сидят как влитые! 🐾🌸" if pct <= 85 else
+                "Ультра-фембойчик 1000 lvl в полосатых чулочках и с баночкой белого Монстра! 🧦🥫💖"
+            )
+            await send_business_reply(
+                message.chat.id,
+                f"🌸 <b>Сканер милоты завершил проверку!</b>\nУровень няшности <b>{tested_user}</b> — <b>{pct}%</b>!\n╰┈➤ 🎀 <i>Вердикт: {rank}</i>",
+                conn_id, partner_title,
             )
             return
 
-        if cmd_word in ("выбор", "choose", "или") and " или " in cmd_arg.lower():
+        if cmd_word in ("выбор", "choose", "или"):
+            if " или " not in cmd_arg.lower():
+                await send_business_reply(message.chat.id, "🎀 Напиши два варианта через «или», например:\n<code>.выбор пойти спать или пить монстр</code>", conn_id, partner_title)
+                return
             idx = cmd_arg.lower().find(" или ")
-            chosen = random.choice([cmd_arg[:idx].strip(), cmd_arg[idx + 5:].strip()])
-            await send_or_edit(event, f"🐾 <b>Лапки выбрали:</b> <b>«{html.escape(chosen)}»</b>! uwu~ ✨")
+            chosen = random.choice([cmd_arg[:idx].strip(), cmd_arg[idx + 5 :].strip()])
+            await send_business_reply(message.chat.id, f"🐾 <b>Лапки сделали выбор:</b>\nКонечно же <b>«{html.escape(chosen)}»</b>! uwu~ ✨", conn_id, partner_title)
             return
 
-        if cmd_word == "uwu" and cmd_arg:
-            await send_or_edit(
-                event, f"🌸 <b>UwU-переводчик:</b>\n<blockquote>{html.escape(uwuify_text(cmd_arg))}</blockquote>"
-            )
+        if cmd_word == "uwu":
+            source_text = cmd_arg or ((message.reply_to_message.text or message.reply_to_message.caption or "") if message.reply_to_message else "")
+            if not source_text:
+                await send_business_reply(message.chat.id, "🥺 Ответь командой <code>.uwu</code> на сообщение или напиши <code>.uwu свой текст</code>!", conn_id, partner_title)
+                return
+            await send_business_reply(message.chat.id, f"🌸 <b>UwU-переводчик:</b>\n<blockquote>{html.escape(uwuify_text(source_text))}</blockquote>", conn_id, partner_title)
             return
 
         if cmd_word in ("брак", "marry"):
-            if not chat_stat.get("married_since"):
+            if chat_stat.get("married_since"):
+                dur = format_duration(int(time.time() - chat_stat["married_since"]))
+                await send_business_reply(message.chat.id, f"💍 Вы с <b>{html.escape(partner_title)}</b> уже в счастливом браке целых <b>{dur}</b>! (◕‿◕)♡", conn_id, partner_title)
+            else:
                 chat_stat["married_since"] = time.time()
                 save_stats(CHAT_STATS)
-            dur = format_duration(int(time.time() - chat_stat["married_since"]))
-            await send_or_edit(
-                event, f"💍🌸 Вы с <b>{html.escape(partner_title)}</b> в счастливом браке уже <b>{dur}</b>! (◕‿◕)♡"
-            )
+                await send_business_reply(
+                    message.chat.id,
+                    f"💍🌸 <b>Горько!</b>\n<b>{sender_name}</b> и <b>{html.escape(partner_title)}</b> теперь официально в няшном браке! Обменялись чокерами и кольцами~ 🎀💞\n╰┈➤ <i>Проверить стаж: <code>.мы</code></i>",
+                    conn_id, partner_title,
+                )
             return
 
         if cmd_word in ("развод", "divorce"):
-            chat_stat["married_since"] = None
-            save_stats(CHAT_STATS)
-            await send_or_edit(event, "💔🥺 Брак расторгнут...")
+            if not chat_stat.get("married_since"):
+                await send_business_reply(message.chat.id, "🥺 Вы и так пока не состоите в браке 👉👈 (заключить: <code>.брак</code>)", conn_id, partner_title)
+            else:
+                dur = format_duration(int(time.time() - chat_stat["married_since"]))
+                chat_stat["married_since"] = None
+                save_stats(CHAT_STATS)
+                await send_business_reply(message.chat.id, f"💔🥺 <b>Брак расторгнут...</b>\nВы пробыли вместе <b>{dur}</b>, но котики решили пойти разными дорожками.", conn_id, partner_title)
             return
 
-        if cmd_word in ("мы", "we", "стата", "stats", "инфо", "info"):
-            await send_or_edit(
-                event,
-                f"📊 <b>Няшная статистика с {html.escape(partner_title)}:</b>\n\n"
-                f"💬 Сообщений: {chat_stat['messages']} | 🎭 РП: {chat_stat['rp_total']}\n"
-                f"✏️ Изменено: {chat_stat['edited_caught']} | 🐾 Удалено: {chat_stat['deleted_caught']}\n"
-                f"📸 Секреток сохранено: {chat_stat.get('secret_media_caught', 0)}",
+        if cmd_word in ("мы", "we"):
+            if not chat_stat.get("married_since"):
+                await send_business_reply(message.chat.id, f"🐾 Вы с <b>{html.escape(partner_title)}</b> пока не в браке! Чтобы пожениться, напиши <code>.брак</code> 💍", conn_id, partner_title)
+            else:
+                dur = format_duration(int(time.time() - chat_stat["married_since"]))
+                await send_business_reply(
+                    message.chat.id,
+                    f"💞 <b>Ваш любовный уголок с {html.escape(partner_title)}:</b>\n\n💍 <b>Вместе уже:</b> {dur}\n🌸 <b>Всего РП-нежностей:</b> {chat_stat['rp_total']}\n💬 <b>Сообщений в чате:</b> {chat_stat['messages']}",
+                    conn_id, partner_title,
+                )
+            return
+
+        if cmd_word in ("стата", "stats"):
+            married_str = f"💍 В браке ({format_duration(int(time.time() - chat_stat['married_since']))})" if chat_stat.get("married_since") else "Свободны котики 🐾"
+            top_rp = sorted(chat_stat.get("rp_breakdown", {}).items(), key=lambda x: x[1], reverse=True)[:5]
+            top_lines = "\n".join([f"  • <code>.{k}</code> — {v} раз(а)" for k, v in top_rp]) if top_rp else "  Пока ни одной команды 🥺"
+            await send_business_reply(
+                message.chat.id,
+                f"📊 <b>Няшная статистика чата с {html.escape(partner_title)}:</b>\n\n💬 <b>Сообщений записано:</b> {chat_stat['messages']}\n🎭 <b>Всего РП-действий:</b> {chat_stat['rp_total']}\n📸 <b>Секретных фото поймано:</b> {chat_stat.get('secret_media_caught', 0)}\n💖 <b>Статус:</b> {married_str}\n\n🏆 <b>Топ ваших действий:</b>\n{top_lines}",
+                conn_id, partner_title,
             )
             return
 
-    # 3. РП-КОМАНДЫ
+        if cmd_word in ("инфо", "info"):
+            uname = f"@{message.chat.username}" if message.chat.username else "скрыт"
+            await send_business_reply(
+                message.chat.id,
+                f"🪪 <b>Карточка котика {html.escape(partner_title)}:</b>\n\n🆔 <b>Telegram ID:</b> <code>{message.chat.id}</code>\n🔗 <b>Юзернейм:</b> {uname}\n💬 <b>Сообщений в базе:</b> {chat_stat['messages']}\n✏️ <b>Изменено сообщений:</b> {chat_stat['edited_caught']}\n🐾 <b>Удалено сообщений:</b> {chat_stat['deleted_caught']}\n📸 <b>Секретных фоток сохранено:</b> {chat_stat.get('secret_media_caught', 0)}",
+                conn_id, partner_title,
+            )
+            return
+
     clean_text = text_stripped.lstrip(".!/").strip()
     clean_lower = clean_text.lower()
     first_word = clean_lower.split()[0] if clean_lower else ""
 
-    matched_cmd = SLASH_RP_ALIASES.get(first_word) if first_word in SLASH_RP_ALIASES else None
-    extra_text = clean_text.split(maxsplit=1)[1] if (matched_cmd and len(clean_text.split(maxsplit=1)) > 1) else ""
+    matched_cmd = None
+    extra_text = ""
 
-    if not matched_cmd:
+    if first_word in SLASH_RP_ALIASES:
+        target_rp = SLASH_RP_ALIASES[first_word]
+        if target_rp in RP_COMMANDS:
+            matched_cmd = target_rp
+            parts = clean_text.split(maxsplit=1)
+            extra_text = parts[1] if len(parts) > 1 else ""
+    else:
         for cmd_key in sorted(RP_COMMANDS.keys(), key=len, reverse=True):
             if clean_lower == cmd_key or clean_lower.startswith(cmd_key + " "):
                 matched_cmd = cmd_key
-                extra_text = clean_text[len(cmd_key):].strip()
+                extra_text = clean_text[len(cmd_key) :].strip()
                 break
 
     if matched_cmd:
         emoji, verb, suffix = format_rp_action(RP_COMMANDS[matched_cmd])
+        suffix_part = f" {html.escape(suffix)}" if suffix else ""
         extra_comment = f"\n╰┈➤ 💭 <i>Реплика: {html.escape(extra_text)}</i> 🎀" if extra_text else ""
+
         chat_stat["rp_total"] += 1
+        chat_stat["rp_breakdown"][matched_cmd] = chat_stat["rp_breakdown"].get(matched_cmd, 0) + 1
         save_stats(CHAT_STATS)
-        await send_or_edit(
-            event,
-            f"{emoji} <b>{sender_name}</b> {html.escape(verb)} <b>{target_name}</b> {html.escape(suffix)}~{extra_comment}",
+
+        await send_business_reply(
+            message.chat.id,
+            f"{emoji} <b>{sender_name}</b> {html.escape(verb)} <b>{target_name}</b>{suffix_part}~{extra_comment}",
+            conn_id, partner_title,
         )
         return
 
-    # 4. АВТООТВЕТЧИК ИИ ПО РЕАЛЬНОМУ ОФЛАЙНУ
-    if not event.out and await is_owner_offline_real():
+    if message.from_user.id != owner_chat_id and is_owner_offline():
         now = time.time()
-        if now - afk_last_reply_time.get(event.chat_id, 0) >= 15:
-            afk_last_reply_time[event.chat_id] = now
-            ai_reply = await ask_ai(event.chat_id, text_stripped, mode="afk", partner_name=partner_title)
-            await event.reply(
+        if now - afk_last_reply_time.get(message.chat.id, 0) >= 15:
+            afk_last_reply_time[message.chat.id] = now
+            ai_reply = await ask_ai(message.chat.id, text_stripped, mode="afk", partner_name=partner_title)
+            await send_business_reply(
+                message.chat.id,
                 f"🌙🐾 <b>[Автоответчик ЧВК «Мягкие Лапки»]:</b>\n<blockquote>{html.escape(ai_reply)}</blockquote>",
-                parse_mode="html",
+                conn_id, partner_title,
             )
 
 
-# ==================== ЛОГГЕР ИЗМЕНЕНИЙ И УДАЛЕНИЙ В «ИЗБРАННОЕ» ====================
-
-@client.on(events.MessageEdited(func=lambda e: e.is_private))
-async def handle_edited(event: events.MessageEdited.Event):
-    if event.out or event.chat_id == OWNER_ID:
-        return
-    old_data = messages_cache.get(event.message.id)
-    old_text = html.escape(old_data["text"]) if old_data and old_data["text"] else "[не сохранено]"
-    new_text = html.escape(event.message.message or "[без текста]")
-    if old_text == new_text:
+@dp.edited_business_message()
+async def handle_edited_business_message(message: types.Message):
+    conn_id = message.business_connection_id
+    owner_chat_id = await get_owner_chat_id(conn_id)
+    if message.from_user.id == owner_chat_id:
         return
 
-    sender = await event.get_sender()
-    sender_name = html.escape(getattr(sender, "first_name", "Собеседник"))
-    if old_data:
-        old_data["text"] = event.message.message or ""
-
-    chat_stat = get_chat_stat(event.chat_id, sender_name)
+    chat_stat = get_chat_stat(message.chat.id, message.chat.full_name or "Собеседник")
     chat_stat["edited_caught"] += 1
     save_stats(CHAT_STATS)
 
-    await client.send_message(
-        "me",
-        f"🌸 <b>Изменено сообщение</b> от <b>{sender_name}</b>:\n\n"
-        f"🎀 <b>Было:</b>\n<blockquote>{old_text}</blockquote>\n"
-        f"✨ <b>Стало:</b>\n<blockquote>{new_text}</blockquote>",
-        parse_mode="html",
+    old_data = messages_cache.get((message.chat.id, message.message_id))
+    old_text = html.escape(old_data["text"]) if old_data and old_data["text"] else "[не сохранено в кэше]"
+    new_text = html.escape(message.text or message.caption or "[без текста]")
+    sender = html.escape(message.from_user.full_name)
+    if old_data:
+        old_data["text"] = message.text or message.caption or ""
+
+    await bot.send_message(
+        chat_id=owner_chat_id,
+        text=(
+            f"🌸 <b>Изменено сообщение</b> от <b>{sender}</b> (👀):\n\n"
+            f"🎀 <b>Было:</b>\n<blockquote>{old_text}</blockquote>\n"
+            f"✨ <b>Стало:</b>\n<blockquote>{new_text}</blockquote>"
+        ),
+        parse_mode="HTML",
     )
 
 
-@client.on(events.MessageDeleted())
-async def handle_deleted(event: events.MessageDeleted.Event):
-    for msg_id in event.deleted_ids:
-        data = messages_cache.pop(msg_id, None)
-        if not data:
+@dp.deleted_business_messages()
+async def handle_deleted_business_messages(event: types.BusinessMessagesDeleted):
+    conn_id = event.business_connection_id
+    owner_chat_id = await get_owner_chat_id(conn_id)
+    chat_stat = get_chat_stat(event.chat.id, event.chat.full_name or "Собеседник")
+
+    for msg_id in event.message_ids:
+        data = messages_cache.pop((event.chat.id, msg_id), None)
+        if not data or data["sender_id"] == owner_chat_id:
             continue
-        chat_stat = get_chat_stat(data["chat_id"], data["sender_name"])
+
         chat_stat["deleted_caught"] += 1
+        if data["media_type"] in ("photo", "video", "video_note", "voice"):
+            chat_stat["secret_media_caught"] = chat_stat.get("secret_media_caught", 0) + 1
         save_stats(CHAT_STATS)
 
+        sender = html.escape(data["sender_name"])
         saved_text = html.escape(data["text"]) if data["text"] else "[без текста]"
-        header = (
-            f"🐾 <b>Удалено сообщение</b> от <b>{data['sender_name']}</b> (не спрячешься~ :3):\n\n"
-            f"<blockquote>{saved_text}</blockquote>"
+        header = f"🐾 <b>Удалено / исчезло сообщение</b> от <b>{sender}</b> (не спрячешься~ :3):\n\n<blockquote>{saved_text}</blockquote>"
+
+        await send_cached_media_to_owner(
+            owner_chat_id=owner_chat_id,
+            m_type=data["media_type"],
+            f_id=data["file_id"],
+            raw_bytes=data.get("raw_bytes"),
+            header=header,
         )
-        if data["raw_bytes"]:
-            file_obj = io.BytesIO(data["raw_bytes"])
-            file_obj.name = f"deleted_media{data['ext']}"
-            await client.send_file("me", file=file_obj, caption=header, parse_mode="html")
-        else:
-            await client.send_message("me", header, parse_mode="html")
 
 
 async def main():
-    global OWNER_ID
-    print("🐾 Запуск чистого Telethon-юзербота...")
-    await client.start()
-    me = await client.get_me()
-    OWNER_ID = me.id
+    await setup_bot_commands()
     model = await resolve_ai_model()
-    print(f"🌸 Юзербот ЧВК «Мягкие Лапки» запущен на аккаунте {me.first_name}! ИИ: {model}")
-    await client.run_until_disconnected()
+    print(f"🌸 Бот успешно запущен! ИИ-модель: {model} | Защита секреток и AFK-режим активны!")
+    await dp.start_polling(bot)
 
 
 if __name__ == "__main__":
