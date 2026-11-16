@@ -11,8 +11,8 @@ from telethon.tl.types import UserStatusOnline
 
 # ==================== НАСТРОЙКИ ====================
 # Данные от my.telegram.org (ОБЯЗАТЕЛЬНО ЗАПОЛНИ СВОИ)
-TG_API_ID = 611335
-TG_API_HASH = "d524b414d21f4d37f08684c1df41ac9d"
+TG_API_ID = 2040
+TG_API_HASH = "b18441a1ff607e10a989891a5462e627"
 
 # Настройка ИИ (provod.ai)
 AI_CLIENT = AsyncOpenAI(
